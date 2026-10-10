@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 
 from nitrogen import __version__
+from nitrogen.inventory import FileEntry, inventory
 
 
 class ExitCode(IntEnum):
@@ -76,7 +77,22 @@ def _scan(path: Path, output: Path | None, policy: Path | None) -> ExitCode:
     if output is not None:
         raise NotImplementedError("AI-BOM output (-o) is not implemented yet")
 
-    # Inventory and analysis come in the next roadmap steps.
-    typer.echo(f"Scanned: {path}")
+    entries = inventory(path)
+    _print_inventory(path, entries)
+    # Risk analysis comes in the next roadmap steps.
     typer.echo("Verdict: COMPLIANT (no analyzers enabled yet)")
     return ExitCode.COMPLIANT
+
+
+def _print_inventory(path: Path, entries: list[FileEntry]) -> None:
+    typer.echo(f"Scanned: {path} ({len(entries)} file{'' if len(entries) == 1 else 's'})")
+    if not entries:
+        return
+    rows = [("FILE", "FORMAT", "SIZE", "SHA-256")] + [
+        (str(e.path), str(e.format), str(e.size), e.sha256) for e in entries
+    ]
+    name_w = max(len(r[0]) for r in rows)
+    fmt_w = max(len(r[1]) for r in rows)
+    size_w = max(len(r[2]) for r in rows)
+    for name, fmt, size, sha in rows:
+        typer.echo(f"{name:<{name_w}}  {fmt:<{fmt_w}}  {size:>{size_w}}  {sha}")
