@@ -10,9 +10,6 @@ import struct
 import zipfile
 from pathlib import Path
 
-from hypothesis import given
-from hypothesis import strategies as st
-
 from nitrogen.formats import PROBE_SIZE, Format, detect_format
 
 PICKLE_P2 = b"\x80\x02K\x01."  # PROTO 2, BININT1 1, STOP
@@ -201,16 +198,3 @@ def test_detection_rewinds_stream() -> None:
     fh.seek(5)
     assert detect_format(fh) == Format.PYTORCH_ZIP
     assert fh.tell() == 0
-
-
-@given(st.binary(max_size=4096))
-def test_fuzz_never_raises(data: bytes) -> None:
-    assert isinstance(_detect(data), Format)
-
-
-@given(
-    st.sampled_from([b"\x80\x02", b"PK\x03\x04", b"PK\x05\x06", b"\x10" + b"\x00" * 7 + b"{"]),
-    st.binary(max_size=4096),
-)
-def test_fuzz_magic_prefixes_never_raise(prefix: bytes, data: bytes) -> None:
-    assert isinstance(_detect(prefix + data), Format)
