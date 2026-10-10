@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.pkl binary
+*.pt binary
+*.bin binary
+*.safetensors binary
