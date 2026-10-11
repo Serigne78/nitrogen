@@ -1,19 +1,34 @@
-"""Inventory of a model path: every regular file with its size, SHA-256 and format.
+"""Inventory of a model path: every regular file with its size, SHA-256, formats
+and findings.
 
 Fail-closed: a path that cannot be read (broken symlink, permission denied,
 FIFO, device...) raises `InventoryError`, never a silent skip.
+
+Each file is analyzed through the descriptor it was just hashed with: the same
+file, not one swapped in between. A concurrent writer could still change its
+bytes between the two reads; a scanned tree is assumed not to be written to.
 """
 
 import hashlib
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
-from nitrogen.formats import Format, detect_format
+from nitrogen.findings import Finding
+from nitrogen.formats import Format, detect_formats
+from nitrogen.safetensors import check_safetensors
 
 CHUNK_SIZE = 1024 * 1024
+
+_ANALYZERS: dict[Format, Callable[[BinaryIO, int], list[Finding]]] = {
+    Format.SAFETENSORS: check_safetensors,
+}
+# Formats with an analyzer. A file with no format (config, tokenizer...) has
+# nothing a supported loader would read, hence nothing to analyze.
+ANALYZED_FORMATS = frozenset(_ANALYZERS)
 
 # O_NONBLOCK: opening a FIFO must not wait for a writer (we reject it right
 # after). O_BINARY: no newline translation on Windows.
@@ -29,7 +44,8 @@ class FileEntry:
     path: PurePosixPath  # relative to the scanned directory, or the file name
     size: int
     sha256: str
-    format: Format
+    formats: frozenset[Format]  # empty: no supported loader would read it
+    findings: tuple[Finding, ...] = ()
 
 
 def inventory(root: Path) -> list[FileEntry]:
@@ -88,10 +104,17 @@ def _entry(rel: PurePosixPath, path: Path) -> FileEntry:
             while chunk := fh.read(CHUNK_SIZE):
                 digest.update(chunk)
                 size += len(chunk)
-            fmt = detect_format(fh)
+            formats = detect_formats(fh)
+            # Every interpretation is analyzed, in a fixed order (ADR 0003).
+            findings = tuple(
+                finding
+                for fmt in sorted(formats)
+                if (analyzer := _ANALYZERS.get(fmt))
+                for finding in analyzer(fh, size)
+            )
     except OSError as exc:
         raise InventoryError(f"cannot read {path}: {exc.strerror}") from exc
     finally:
         if fd != -1:
             os.close(fd)
-    return FileEntry(rel, size, digest.hexdigest(), fmt)
+    return FileEntry(rel, size, digest.hexdigest(), formats, findings)
