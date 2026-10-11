@@ -1,4 +1,5 @@
 import hashlib
+import struct
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,46 @@ def test_scan_single_file(tmp_path: Path) -> None:
     assert result.exit_code == ExitCode.COMPLIANT
     assert "model.bin" in result.output
     assert "pickle" in result.output
+    assert "not analyzed yet" in result.output  # COMPLIANT must not oversell
+
+
+def _safetensors(data: bytes) -> bytes:
+    raw = b'{"w":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}'
+    return struct.pack("<Q", len(raw)) + raw + data
+
+
+def test_healthy_safetensors_is_compliant(tmp_path: Path) -> None:
+    (tmp_path / "model.safetensors").write_bytes(_safetensors(bytes(8)))
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.COMPLIANT
+    assert "Verdict: COMPLIANT" in result.output
+
+
+def test_safetensors_with_leading_space_is_risk_not_unknown(tmp_path: Path) -> None:
+    raw = b' {"w":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}'
+    (tmp_path / "model.safetensors").write_bytes(struct.pack("<Q", len(raw)) + raw + bytes(8))
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    assert "safetensors.header-json" in result.output
+
+
+def test_file_name_cannot_forge_a_verdict_line(tmp_path: Path) -> None:
+    try:
+        (tmp_path / "x\nVerdict: COMPLIANT").write_bytes(_safetensors(bytes(8) + b"!"))
+    except OSError:
+        pytest.skip("control characters not allowed in file names here")
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    verdicts = [line for line in result.output.splitlines() if line.startswith("Verdict:")]
+    assert verdicts == ["Verdict: RISK (1 finding)"]
+
+
+def test_malformed_safetensors_is_risk(tmp_path: Path) -> None:
+    (tmp_path / "model.safetensors").write_bytes(_safetensors(bytes(8) + b"hidden"))
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    assert "safetensors.layout" in result.output
+    assert "Verdict: RISK" in result.output
 
 
 def test_scan_unreadable_entry_is_error(tmp_path: Path) -> None:

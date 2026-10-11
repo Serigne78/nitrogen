@@ -2,14 +2,19 @@
 
 Only the bytes decide: file names and extensions are never consulted.
 Nothing here deserializes; pickles are probed with `pickletools.genops`.
+
+A file gets every format a supported loader would accept, with no priority
+between them (ADR 0003): a polyglot cannot pick which analysis runs. No
+format at all means no supported loader would read it.
 """
 
 import io
 import pickletools
 import re
 import struct
+import tarfile
 import zipfile
-from enum import Enum, StrEnum, auto
+from enum import StrEnum
 from typing import BinaryIO
 
 # Bytes read to probe a pickle without magic (protocol 0/1). The probe runs on
@@ -17,8 +22,9 @@ from typing import BinaryIO
 # lengths (a BINUNICODE announcing 4 GiB allocates 4 GiB).
 PROBE_SIZE = 64 * 1024
 
-# Local file header, or end of central directory for an empty archive. Same
-# offset-0 rule as torch.load, so a file torch reads as a zip is a zip here.
+# Local file header (torch.load's zip test), or end of central directory for an
+# empty archive (which torch sends down its legacy path, where the plain
+# magic-number unpickler stops at once on "P").
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06")
 
 
@@ -26,12 +32,12 @@ class Format(StrEnum):
     PICKLE = "pickle"
     PYTORCH_ZIP = "pytorch-zip"
     ZIP = "zip"
+    TAR = "tar"  # pre-1.6 torch.save: torch.load still unpickles its members
     SAFETENSORS = "safetensors"
-    UNKNOWN = "unknown"
 
 
-def detect_format(fh: BinaryIO) -> Format:
-    """Detect the format of a seekable binary stream, left rewound to offset 0."""
+def detect_formats(fh: BinaryIO) -> frozenset[Format]:
+    """Every format of a seekable binary stream, which is left rewound to 0."""
     fh.seek(0)
     try:
         return _detect(fh)
@@ -39,23 +45,39 @@ def detect_format(fh: BinaryIO) -> Format:
         fh.seek(0)
 
 
-def _detect(fh: BinaryIO) -> Format:
+def _detect(fh: BinaryIO) -> frozenset[Format]:
     prefix = fh.read(PROBE_SIZE)
-    # PROTO opcode: pickle protocol 2 to 5 (also the legacy non-zip torch.save).
-    if len(prefix) >= 2 and prefix[0] == 0x80 and 2 <= prefix[1] <= 5:
-        return Format.PICKLE
+    file_continues = fh.read(1) != b""
+    formats: set[Format] = set()
     if prefix[:4] in _ZIP_MAGICS:
-        return _zip_format(fh)
-    probe = _probe_headless_pickle(prefix, file_continues=fh.read(1) != b"")
-    # A pickle loader resolving a global wins over the loose safetensors check:
-    # a safetensors/pickle polyglot runs code under torch.load.
-    if probe is _Probe.RESOLVES_GLOBAL:
-        return Format.PICKLE
+        # torch.load takes its zip path. A plain unpickler stops at once on
+        # "P" (PERSID) without a persistent_load: no pickle reading to analyze.
+        formats.add(_zip_format(fh))
+    elif _has_proto_magic(prefix) or _reads_as_pickle(prefix, file_continues=file_continues):
+        formats.add(Format.PICKLE)
+    if _is_tar(fh):
+        formats.add(Format.TAR)
     if _is_safetensors(prefix):
-        return Format.SAFETENSORS
-    if probe is _Probe.PLAUSIBLE:
-        return Format.PICKLE
-    return Format.UNKNOWN
+        formats.add(Format.SAFETENSORS)
+    return frozenset(formats)
+
+
+def _is_tar(fh: BinaryIO) -> bool:
+    """torch.load's own test: tarfile.open(mode="r:") reads a first header.
+
+    Only that header block is parsed (checksum included); nothing is extracted.
+    """
+    fh.seek(0)
+    try:
+        with tarfile.open(fileobj=fh, mode="r:", format=tarfile.PAX_FORMAT):
+            return True
+    except (tarfile.TarError, OSError, ValueError, EOFError, UnicodeError):
+        return False
+
+
+def _has_proto_magic(prefix: bytes) -> bool:
+    # PROTO opcode: pickle protocol 2 to 5 (also the legacy non-zip torch.save).
+    return len(prefix) >= 2 and prefix[0] == 0x80 and 2 <= prefix[1] <= 5
 
 
 def _zip_format(fh: BinaryIO) -> Format:
@@ -78,43 +100,70 @@ def _zip_format(fh: BinaryIO) -> Format:
 def _is_safetensors(prefix: bytes) -> bool:
     """8-byte little-endian header size, then a JSON object.
 
-    Deliberately loose: header size, JSON and offsets are validated by the
-    safetensors parser, which reports a malformed file as a risk.
+    Matches what the reference loader accepts, not what a typical file looks
+    like: JSON whitespace before "{" is allowed, so that such a file reaches
+    the safetensors parser (which reports it) instead of falling to UNKNOWN.
+    Deliberately loose otherwise: size, JSON and offsets are validated there.
     """
     if len(prefix) < 9:
         return False
     (header_size,) = struct.unpack("<Q", prefix[:8])
-    return header_size >= 2 and prefix[8:9] == b"{"
+    start = prefix[8:].lstrip(b" \t\n\r")
+    # Whitespace up to the probe limit: the "{" may come later.
+    return header_size >= 2 and (start[:1] == b"{" or (start == b"" and len(prefix) == PROBE_SIZE))
 
 
-class _Probe(Enum):
-    NOT_PICKLE = auto()
-    PLAUSIBLE = auto()  # reaches STOP, or valid opcodes up to the probe limit
-    RESOLVES_GLOBAL = auto()  # a loader would import something: always a pickle
+def _reads_as_pickle(prefix: bytes, *, file_continues: bool) -> bool:
+    """Would an unpickler read this stream? Protocol 0/1 have no magic.
 
-
-def _probe_headless_pickle(prefix: bytes, *, file_continues: bool) -> _Probe:
-    """Protocol 0/1 pickles have no magic: walk their opcodes instead.
-
-    An unpickler acts on each opcode as it reads it, so what counts is what it
-    does before the stream breaks, not whether the stream is well formed: a
-    global resolved before garbage or a missing STOP is still executed. Pickles
-    may be concatenated (legacy torch.save), so probing goes on after STOP.
+    Yes if it resolves a global, reaches STOP, or stays valid up to the probe
+    limit. An unpickler acts on each opcode as it reads it, so what counts is
+    what it does before the stream breaks: a global resolved before garbage or
+    a missing STOP is still executed. Pickles may be concatenated (legacy
+    torch.save), so probing goes on after STOP.
     """
     stream = io.BytesIO(prefix)
-    result = _Probe.NOT_PICKLE
+    reached_stop = False
+    while stream.tell() < len(prefix):
+        ops = pickletools.genops(stream)
+        str_pushes = 0  # per pickle: STACK_GLOBAL needs two names on the stack
+        while True:
+            start = stream.tell()
+            try:
+                opcode, arg, _pos = next(ops)
+            except StopIteration:
+                break
+            except ValueError:
+                if _loader_reads_int(prefix, start):
+                    return True
+                if prefix[start : start + 1] == b"P" and not reached_stop:
+                    return False  # PERSID whose line runs past the probe: see below
+                return reached_stop or (file_continues and stream.tell() >= len(prefix))
+            if opcode.name in ("PERSID", "BINPERSID") and not reached_stop:
+                # The first pickle is read by a plain unpickler (pickle.load,
+                # torch's magic-number load): no persistent_load, it stops here.
+                return False
+            if _resolves_global(opcode.name, arg, str_pushes):
+                return True
+            str_pushes += opcode.name in _MAY_PUSH_STR
+        reached_stop = True
+    return reached_stop
+
+
+def _loader_reads_int(prefix: bytes, start: int) -> bool:
+    """Known genops/unpickler gap: INT and LONG lines are read with int(s) by
+    genops but int(s, 0) by the unpickler, which also takes "0x1", "0o7"...
+    Where genops stops and the loader goes on, the stream is a pickle."""
+    code = prefix[start : start + 1]
+    end = prefix.find(b"\n", start)
+    if code not in (b"I", b"L") or end == -1:
+        return False
+    line = prefix[start + 1 : end]
     try:
-        while stream.tell() < len(prefix):
-            str_pushes = 0  # per pickle: STACK_GLOBAL needs two names on the stack
-            for opcode, arg, _pos in pickletools.genops(stream):
-                if _resolves_global(opcode.name, arg, str_pushes):
-                    return _Probe.RESOLVES_GLOBAL
-                str_pushes += opcode.name in _MAY_PUSH_STR
-            result = _Probe.PLAUSIBLE
+        int(line.removesuffix(b"L") if code == b"L" else line, 0)
     except ValueError:
-        if file_continues and stream.tell() >= len(prefix):
-            return _Probe.PLAUSIBLE
-    return result
+        return False
+    return True
 
 
 def _resolves_global(name: str, arg: object, str_pushes: int) -> bool:

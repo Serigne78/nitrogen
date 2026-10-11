@@ -5,12 +5,12 @@ import io
 from hypothesis import given
 from hypothesis import strategies as st
 
-from nitrogen.formats import Format, detect_format
+from nitrogen.formats import Format, detect_formats
 
 
 @given(st.binary(max_size=4096))
 def test_never_raises(data: bytes) -> None:
-    assert isinstance(detect_format(io.BytesIO(data)), Format)
+    assert detect_formats(io.BytesIO(data)) <= set(Format)
 
 
 @given(
@@ -18,4 +18,4 @@ def test_never_raises(data: bytes) -> None:
     st.binary(max_size=4096),
 )
 def test_magic_prefixes_never_raise(prefix: bytes, data: bytes) -> None:
-    assert isinstance(detect_format(io.BytesIO(prefix + data)), Format)
+    assert detect_formats(io.BytesIO(prefix + data)) <= set(Format)

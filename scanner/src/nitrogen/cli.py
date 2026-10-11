@@ -12,7 +12,8 @@ from typing import Annotated
 import typer
 
 from nitrogen import __version__
-from nitrogen.inventory import FileEntry, inventory
+from nitrogen.formats import Format
+from nitrogen.inventory import ANALYZED_FORMATS, FileEntry, inventory
 
 
 class ExitCode(IntEnum):
@@ -85,20 +86,49 @@ def _scan(path: Path, output: Path | None, policy: Path | None) -> ExitCode:
 
     entries = inventory(path)
     _print_inventory(path, entries)
-    # Risk analysis comes in the next roadmap steps.
-    typer.echo("Verdict: COMPLIANT (no analyzers enabled yet)")
+    findings = [(e.path, f) for e in entries for f in e.findings]
+    if findings:
+        typer.echo("Findings:")
+        for file, finding in findings:
+            typer.echo(f"  {_printable(str(file))}  [{finding.rule}] {finding.message}")
+        typer.echo(f"Verdict: RISK ({_plural(len(findings), 'finding')})")
+        return ExitCode.RISK
+    unanalyzed = [e for e in entries if e.formats - ANALYZED_FORMATS]
+    if unanalyzed:
+        # Pickle analysis comes in step 5: do not let COMPLIANT oversell.
+        formats = ", ".join(
+            sorted({str(f) for e in unanalyzed for f in e.formats - ANALYZED_FORMATS})
+        )
+        note = f"{_plural(len(unanalyzed), 'file')} ({formats}) not analyzed yet"
+        typer.echo(f"Verdict: COMPLIANT ({note})")
+    else:
+        typer.echo("Verdict: COMPLIANT")
     return ExitCode.COMPLIANT
 
 
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
 def _print_inventory(path: Path, entries: list[FileEntry]) -> None:
-    typer.echo(f"Scanned: {path} ({len(entries)} file{'' if len(entries) == 1 else 's'})")
+    typer.echo(f"Scanned: {_printable(str(path))} ({_plural(len(entries), 'file')})")
     if not entries:
         return
     rows = [("FILE", "FORMAT", "SIZE", "SHA-256")] + [
-        (str(e.path), str(e.format), str(e.size), e.sha256) for e in entries
+        (_printable(str(e.path)), _format_label(e.formats), str(e.size), e.sha256) for e in entries
     ]
     name_w = max(len(r[0]) for r in rows)
     fmt_w = max(len(r[1]) for r in rows)
     size_w = max(len(r[2]) for r in rows)
     for name, fmt, size, sha in rows:
         typer.echo(f"{name:<{name_w}}  {fmt:<{fmt_w}}  {size:>{size_w}}  {sha}")
+
+
+def _format_label(formats: frozenset[Format]) -> str:
+    return "+".join(sorted(formats)) or "unknown"
+
+
+def _printable(text: str) -> str:
+    # A file named "x\nVerdict: COMPLIANT" (or with ANSI escapes) must not
+    # forge output lines: anything non-printable is shown escaped.
+    return text if text.isprintable() else repr(text)

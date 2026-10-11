@@ -21,9 +21,7 @@ def _symlink(link: Path, target: Path, *, directory: bool = False) -> None:
 
 def test_empty_file(tmp_path: Path) -> None:
     (tmp_path / "empty").write_bytes(b"")
-    assert inventory(tmp_path) == [
-        FileEntry(PurePosixPath("empty"), 0, EMPTY_SHA256, Format.UNKNOWN)
-    ]
+    assert inventory(tmp_path) == [FileEntry(PurePosixPath("empty"), 0, EMPTY_SHA256, frozenset())]
 
 
 def test_hash_and_format(tmp_path: Path) -> None:
@@ -32,7 +30,7 @@ def test_hash_and_format(tmp_path: Path) -> None:
     [entry] = inventory(tmp_path)
     assert entry.sha256 == hashlib.sha256(data).hexdigest()
     assert entry.size == len(data)
-    assert entry.format == Format.PICKLE
+    assert entry.formats == {Format.PICKLE}
 
 
 def test_hash_of_multi_chunk_file(tmp_path: Path) -> None:
@@ -56,13 +54,28 @@ def test_empty_directory(tmp_path: Path) -> None:
     assert inventory(tmp_path) == []
 
 
+def test_safetensors_findings_are_attached(tmp_path: Path) -> None:
+    raw = b'{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}'
+    (tmp_path / "ok.safetensors").write_bytes(struct.pack("<Q", len(raw)) + raw + bytes(8))
+    (tmp_path / "bad.safetensors").write_bytes(struct.pack("<Q", len(raw)) + raw + bytes(4))
+    entries = {e.path.name: e for e in inventory(tmp_path)}
+    assert entries["ok.safetensors"].findings == ()
+    assert [f.rule for f in entries["bad.safetensors"].findings] == ["safetensors.layout"]
+
+
+def test_unanalyzed_formats_have_no_findings(tmp_path: Path) -> None:
+    (tmp_path / "p.bin").write_bytes(b"\x80\x02K\x01.")
+    (tmp_path / "config.json").write_bytes(b"{}")
+    assert all(e.findings == () for e in inventory(tmp_path))
+
+
 def test_single_file(tmp_path: Path) -> None:
     raw = b'{"__metadata__": {}}'
     model = tmp_path / "model.safetensors"
     model.write_bytes(struct.pack("<Q", len(raw)) + raw)
     [entry] = inventory(model)
     assert entry.path == PurePosixPath("model.safetensors")
-    assert entry.format == Format.SAFETENSORS
+    assert entry.formats == {Format.SAFETENSORS}
 
 
 def test_missing_root(tmp_path: Path) -> None:
@@ -80,7 +93,7 @@ def test_file_symlink_is_followed(tmp_path: Path) -> None:
     _symlink(snapshot / "pytorch_model.bin", blobs / "abc")
     [entry] = inventory(snapshot)
     assert entry.path == PurePosixPath("pytorch_model.bin")
-    assert entry.format == Format.PICKLE
+    assert entry.formats == {Format.PICKLE}
 
 
 def test_directory_symlink_inside_root_is_listed_once(tmp_path: Path) -> None:
