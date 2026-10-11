@@ -58,6 +58,19 @@ def test_scan_unreadable_entry_is_error(tmp_path: Path) -> None:
     assert result.exit_code == ExitCode.ERROR
 
 
+@pytest.mark.parametrize("exit_code", [0, 1, None])
+def test_exit_during_scan_is_error_never_compliant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int | None
+) -> None:
+    # A sys.exit() buried in the scan must not leak as 0 ("compliant").
+    def exits(_: Path) -> None:
+        raise SystemExit(exit_code)
+
+    monkeypatch.setattr("nitrogen.cli.inventory", exits)
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.ERROR
+
+
 def test_scan_missing_path_is_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["scan", str(tmp_path / "nope")])
     assert result.exit_code == ExitCode.ERROR

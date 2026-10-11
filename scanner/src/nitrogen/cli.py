@@ -66,6 +66,12 @@ def scan(
     except Exception as exc:
         typer.echo(f"error: {exc}", err=True)
         code = ExitCode.ERROR
+    except SystemExit as exc:
+        # A sys.exit() buried in a dependency would otherwise leak its own
+        # code, 0 meaning "compliant" for a model nobody checked. Ctrl+C
+        # (KeyboardInterrupt) still goes through.
+        typer.echo(f"error: unexpected exit ({exc.code}) during the scan", err=True)
+        code = ExitCode.ERROR
     raise typer.Exit(code)
 
 
