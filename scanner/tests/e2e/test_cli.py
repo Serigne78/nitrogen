@@ -56,6 +56,16 @@ def _safetensors(data: bytes) -> bytes:
     return struct.pack("<Q", len(raw)) + raw + data
 
 
+def test_ordinary_text_files_are_compliant(tmp_path: Path) -> None:
+    # The CI smoke test scans a whole .venv: text files with "{" early on
+    # (Python dicts, pkg-config, JSON) must not read as safetensors.
+    (tmp_path / "codes.py").write_bytes(b'EMOJI = {\n    "x": "y",\n}\n')
+    (tmp_path / "numpy.pc").write_bytes(b"prefix=${pcfiledir}/../..\n")
+    (tmp_path / "renv.lock").write_bytes(b'{\n  "R": {\n    "Version": "4.2.3"\n  }\n}\n')
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.COMPLIANT, result.output
+
+
 def test_healthy_safetensors_is_compliant(tmp_path: Path) -> None:
     (tmp_path / "model.safetensors").write_bytes(_safetensors(bytes(8)))
     result = runner.invoke(app, ["scan", str(tmp_path)])

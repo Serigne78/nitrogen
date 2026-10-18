@@ -147,7 +147,23 @@ def test_safetensors() -> None:
 
 def test_safetensors_with_malformed_header_is_still_detected() -> None:
     # Step 3 reports it; detection must not let it slip to UNKNOWN.
-    assert _detect(struct.pack("<Q", 10**12) + b"{garbage") == {Format.SAFETENSORS}
+    assert _detect(struct.pack("<Q", 8) + b"{garbage") == {Format.SAFETENSORS}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        b'EMOJI = {\n    "1st_place_medal": "\xf0\x9f\xa5\x87",\n}\n',  # rich/_emoji_codes.py
+        b"prefix=${pcfiledir}/../../..\nincludedir=${prefix}/include\n",  # numpy.pc
+        b'{\n  "R": {\n    "Version": "4.2.3"\n  }\n}\n',  # pre-commit renv.lock
+        b'{"abc": {"def": 1}}',  # any JSON with an object at byte 8
+    ],
+    ids=["python", "pkgconfig", "json-indented", "json-compact"],
+)
+def test_text_with_brace_at_byte_8_is_not_safetensors(text: bytes) -> None:
+    # Read as a size, 8 bytes of text are ~10**18: no loader reads a header
+    # past the end of the file. False positives seen in CI on .venv.
+    assert Format.SAFETENSORS not in _detect(text)
 
 
 def test_safetensors_whose_size_bytes_are_pickle_opcodes() -> None:
@@ -175,11 +191,11 @@ def test_size_field_colliding_with_pickle_magic(size: int) -> None:
     assert _detect(_safetensors_sized(size)) == {Format.PICKLE, Format.SAFETENSORS}
 
 
-def test_size_field_colliding_with_zip_magic() -> None:
-    # A 67 MB header size reads "PK\x03\x04": zip for torch.load, safetensors
-    # for the safetensors loader. Only the prefix matters for detection.
+def test_zip_magic_size_beyond_the_file_is_only_a_zip() -> None:
+    # A 67 MB header size reads "PK\x03\x04". Without the 67 MB that follow,
+    # no safetensors loader reads it; the real polyglot is tested below.
     blob = struct.pack("<Q", 0x04034B50) + b'{"__metadata__":{}}'
-    assert _detect(blob) == {Format.ZIP, Format.SAFETENSORS}
+    assert _detect(blob) == {Format.ZIP}
 
 
 def test_safetensors_pytorch_zip_polyglot() -> None:

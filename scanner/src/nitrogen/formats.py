@@ -48,6 +48,7 @@ def detect_formats(fh: BinaryIO) -> frozenset[Format]:
 def _detect(fh: BinaryIO) -> frozenset[Format]:
     prefix = fh.read(PROBE_SIZE)
     file_continues = fh.read(1) != b""
+    size = fh.seek(0, io.SEEK_END)
     formats: set[Format] = set()
     if prefix[:4] in _ZIP_MAGICS:
         # torch.load takes its zip path. A plain unpickler stops at once on
@@ -57,7 +58,7 @@ def _detect(fh: BinaryIO) -> frozenset[Format]:
         formats.add(Format.PICKLE)
     if _is_tar(fh):
         formats.add(Format.TAR)
-    if _is_safetensors(prefix):
+    if _is_safetensors(prefix, size):
         formats.add(Format.SAFETENSORS)
     return frozenset(formats)
 
@@ -97,17 +98,21 @@ def _zip_format(fh: BinaryIO) -> Format:
     return Format.ZIP
 
 
-def _is_safetensors(prefix: bytes) -> bool:
+def _is_safetensors(prefix: bytes, size: int) -> bool:
     """8-byte little-endian header size, then a JSON object.
 
     Matches what the reference loader accepts, not what a typical file looks
     like: JSON whitespace before "{" is allowed, so that such a file reaches
     the safetensors parser (which reports it) instead of falling to UNKNOWN.
-    Deliberately loose otherwise: size, JSON and offsets are validated there.
+    And the header must fit in the file, as every loader requires: read as a
+    size, 8 bytes of text are ~10**18, so "EMOJI = {" is no safetensors.
+    Deliberately loose otherwise: JSON and offsets are validated there.
     """
     if len(prefix) < 9:
         return False
     (header_size,) = struct.unpack("<Q", prefix[:8])
+    if header_size > size - 8:
+        return False
     start = prefix[8:].lstrip(b" \t\n\r")
     # Whitespace up to the probe limit: the "{" may come later.
     return header_size >= 2 and (start[:1] == b"{" or (start == b"" and len(prefix) == PROBE_SIZE))
