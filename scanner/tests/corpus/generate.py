@@ -145,9 +145,11 @@ def pytorch_zip(data_pkl: bytes) -> bytes:
             ("archive/version", b"3\n"),
             ("archive/byteorder", b"little"),
         ]:
-            # Fixed timestamp: zipfile stamps mod time, which would otherwise
-            # make the corpus non-reproducible.
+            # Fixed timestamp and host system: both are stamped by zipfile and
+            # would otherwise make the bytes differ across runs and OSes
+            # (create_system is 0 on Windows, 3 on Unix).
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 0
             zf.writestr(info, content)
     return buf.getvalue()
 
