@@ -1,0 +1,4 @@
+cbuiltins
+getattr
+(S'os'
+tR.

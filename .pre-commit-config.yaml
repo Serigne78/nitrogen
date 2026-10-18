@@ -5,8 +5,12 @@ repos:
     hooks:
       - id: check-yaml
       - id: check-toml
+      # The corpus holds exact bytes (hand-written pickles); a fixer that adds
+      # a trailing newline would corrupt them and make generate.py disagree.
       - id: end-of-file-fixer
+        exclude: ^scanner/tests/corpus/[^/]+\.(pkl|pt|safetensors)$
       - id: trailing-whitespace
+        exclude: ^scanner/tests/corpus/[^/]+\.(pkl|pt|safetensors)$
       - id: check-added-large-files
 
   - repo: local

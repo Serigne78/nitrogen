@@ -1,0 +1,4 @@
+cbuiltins
+__import__
+(S'os'
+tR.

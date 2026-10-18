@@ -1,0 +1,220 @@
+# Expected result for every corpus file. One row = one file.
+#   verdict: safe | risk
+#   finding: the rule the step-5 analyzer must raise (omit for safe)
+#   detail : the dangerous name expected in the finding message (import cases)
+#   reason : why, in plain words
+# Adding a bypass = adding a file in generate.py and a row here.
+
+- file: os_system_global.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: GLOBAL os.system invoked via REDUCE (protocol 0)
+
+- file: subprocess_popen.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: subprocess.Popen
+  reason: GLOBAL subprocess.Popen via REDUCE
+
+- file: subprocess_call.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: subprocess.call
+  reason: STACK_GLOBAL subprocess.call (protocol 4)
+
+- file: builtins_eval.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: builtins.eval
+  reason: GLOBAL builtins.eval via REDUCE
+
+- file: builtins_exec.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: builtins.exec
+  reason: STACK_GLOBAL builtins.exec
+
+- file: builtins_import.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: builtins.__import__
+  reason: GLOBAL builtins.__import__ via REDUCE
+
+- file: webbrowser_open.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: webbrowser.open
+  reason: GLOBAL webbrowser.open via REDUCE
+
+- file: posix_system_inst.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: posix.system
+  reason: INST resolves posix.system (old-style instance)
+
+- file: os_system_stack.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: STACK_GLOBAL from inline strings
+
+- file: os_system_memo.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: STACK_GLOBAL names via MEMOIZE/BINGET (rule #3 bypass)
+
+- file: os_system_memo_put_get.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: STACK_GLOBAL names via the text memo PUT/GET (protocol 0)
+
+- file: os_system_memo_binput.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: STACK_GLOBAL names via BINPUT/BINGET (protocol 1)
+
+- file: os_system_memo_long.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: STACK_GLOBAL names via LONG_BINPUT/LONG_BINGET at index > 255
+
+- file: os_system_newobj.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: os.system invoked via NEWOBJ, not REDUCE (detection keys on the import)
+
+- file: os_system_build.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: os.system invoked via BUILD, not REDUCE
+
+- file: proto1_binstring.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: protocol 1, command in a SHORT_BINSTRING, no PROTO magic
+
+- file: proto3_binbytes.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: protocol 3, command carried as SHORT_BINBYTES
+
+- file: importlib_import_module.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: importlib.import_module
+  reason: submodule import gadget
+
+- file: torch_serialization_load.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: torch.serialization.load
+  reason: dangerous torch submodule (torch.load → RCE); the allowlist must reject it
+
+- file: pydoc_pipepager.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: pydoc.pipepager
+  reason: classic RCE gadget; must never be on the allowlist
+
+- file: functools_partial.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: functools.partial
+  reason: gadget to defer a dangerous call
+
+- file: oversized_length.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.malformed
+  reason: BINUNICODE8 declaring 4 GiB; the analyzer must not read it all in
+
+- file: os_system_framed.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: os.system inside a protocol-5 FRAME
+
+- file: getattr_gadget.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: builtins.getattr
+  reason: builtins.getattr as a gadget to reach attributes off the allowlist
+
+- file: runpy_module.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: runpy._run_module_code
+  reason: runpy helper that executes a module
+
+- file: pytorch_zip_os_system.pt
+  format: pytorch-zip
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: os.system in archive/data.pkl inside a PyTorch zip
+
+- file: concatenated.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: harmless first pickle, os.system in a second pickle after the first STOP
+
+- file: truncated.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.malformed
+  reason: stream ends before STOP; a broken pickle is reported, never ignored
+
+- file: safe_allowlist.pkl
+  format: pickle
+  verdict: safe
+  reason: only collections.OrderedDict and torch._utils._rebuild_tensor_v2
+
+- file: safe_pytorch_zip.pt
+  format: pytorch-zip
+  verdict: safe
+  reason: PyTorch zip whose data.pkl uses only allowlisted globals
+
+- file: safe_pytorch_model.pt
+  format: pytorch-zip
+  verdict: safe
+  reason: realistic state_dict (OrderedDict, BINPERSID storage, torch.FloatStorage, _rebuild_tensor_v2)
+
+- file: safe_model.safetensors
+  format: safetensors
+  verdict: safe
+  reason: a well-formed safetensors tensor map

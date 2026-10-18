@@ -1,0 +1,4 @@
+cwebbrowser
+open
+(S'echo nitrogen'
+tR.
