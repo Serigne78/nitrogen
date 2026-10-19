@@ -15,15 +15,23 @@ import stat
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
 
+from nitrogen.archives import check_tar, check_zip
 from nitrogen.findings import Finding
 from nitrogen.formats import Format, detect_formats
+from nitrogen.pickle_scan import check_pickle
 from nitrogen.safetensors import check_safetensors
 
 CHUNK_SIZE = 1024 * 1024
 
-_ANALYZERS: dict[Format, Callable[[BinaryIO, int], list[Finding]]] = {
+# An analyzer takes the stream, its size, and whether the file's only format is
+# this one (False for a polyglot: a parse error is then not a finding, ADR 0003).
+Analyzer = Callable[..., list[Finding]]
+_ANALYZERS: dict[Format, Analyzer] = {
+    Format.PICKLE: check_pickle,
+    Format.PYTORCH_ZIP: check_zip,
+    Format.ZIP: check_zip,
+    Format.TAR: check_tar,
     Format.SAFETENSORS: check_safetensors,
 }
 # Formats with an analyzer. A file with no format (config, tokenizer...) has
@@ -106,11 +114,13 @@ def _entry(rel: PurePosixPath, path: Path) -> FileEntry:
                 size += len(chunk)
             formats = detect_formats(fh)
             # Every interpretation is analyzed, in a fixed order (ADR 0003).
+            # A polyglot's parse errors are suppressed (sole_format=False).
+            sole = len(formats) == 1
             findings = tuple(
                 finding
                 for fmt in sorted(formats)
                 if (analyzer := _ANALYZERS.get(fmt))
-                for finding in analyzer(fh, size)
+                for finding in analyzer(fh, size, sole_format=sole)
             )
     except OSError as exc:
         raise InventoryError(f"cannot read {path}: {exc.strerror}") from exc

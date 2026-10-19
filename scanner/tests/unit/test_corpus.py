@@ -22,7 +22,9 @@ BY_FILE = {case["file"]: case for case in CASES}
 
 
 def _corpus_files() -> list[Path]:
-    return sorted(p for p in CORPUS.iterdir() if p.suffix in (".pkl", ".pt", ".safetensors"))
+    return sorted(
+        p for p in CORPUS.iterdir() if p.suffix in (".pkl", ".pt", ".zip", ".safetensors")
+    )
 
 
 def test_cases_and_files_match() -> None:
@@ -61,7 +63,7 @@ def test_corpus_has_both_verdicts() -> None:
 def test_case_schema(case: dict[str, Any]) -> None:
     assert case["verdict"] in ("safe", "risk")
     if case["verdict"] == "risk":
-        assert case["finding"] in ("pickle.import", "pickle.malformed")
+        assert case["finding"] in ("pickle.import", "pickle.malformed", "pickle.unanalyzable")
         if case["finding"] == "pickle.import":
             assert case["detail"]  # the dangerous name must be named
     else:
@@ -145,6 +147,15 @@ def _pickle_streams(data: bytes) -> list[bytes]:
         # Every member, not only *.pkl: a payload could hide in any entry.
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             return [zf.read(n) for n in zf.namelist()]
+    import tarfile
+
+    try:
+        # Legacy torch tar: every member, read in memory, never extracted.
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tar:
+            files = [m for m in tar.getmembers() if m.isfile()]
+            return [tar.extractfile(m).read() for m in files]  # type: ignore[union-attr]
+    except tarfile.TarError:
+        pass
     if len(data) >= 8 and data[8:9] == b"{":
         return []  # safetensors: no embedded pickle
     return [data]

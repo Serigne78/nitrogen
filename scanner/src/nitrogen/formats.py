@@ -141,12 +141,22 @@ def _reads_as_pickle(prefix: bytes, *, file_continues: bool) -> bool:
             except ValueError:
                 if _loader_reads_int(prefix, start):
                     return True
+                if recoverable_global(prefix, start) is not None:
+                    return True  # GLOBAL/INST line the loader reads without a final newline
                 if prefix[start : start + 1] == b"P" and not reached_stop:
                     return False  # PERSID whose line runs past the probe: see below
                 return reached_stop or (file_continues and stream.tell() >= len(prefix))
+            if opcode.name == "STOP" and start == 0:
+                # An empty first pickle: STOP pops an empty stack and every
+                # loader fails here, before any later pickle is read.
+                return False
             if opcode.name in ("PERSID", "BINPERSID") and not reached_stop:
                 # The first pickle is read by a plain unpickler (pickle.load,
                 # torch's magic-number load): no persistent_load, it stops here.
+                return False
+            if opcode.name in ("GLOBAL", "INST") and not _importable(arg) and not reached_stop:
+                # A module/name that cannot exist (a CSV line, prose) makes the
+                # loader fail right here: nothing after it runs, no pickle.
                 return False
             if _resolves_global(opcode.name, arg, str_pushes):
                 return True
@@ -155,20 +165,52 @@ def _reads_as_pickle(prefix: bytes, *, file_continues: bool) -> bool:
     return reached_stop
 
 
-def _loader_reads_int(prefix: bytes, start: int) -> bool:
+def recoverable_int_line(data: bytes, start: int) -> int | None:
     """Known genops/unpickler gap: INT and LONG lines are read with int(s) by
     genops but int(s, 0) by the unpickler, which also takes "0x1", "0o7"...
-    Where genops stops and the loader goes on, the stream is a pickle."""
-    code = prefix[start : start + 1]
-    end = prefix.find(b"\n", start)
+    Where genops stops and the loader goes on, the stream is a pickle. Returns
+    the offset just past the line so a walk can resume, or None if the loader
+    would fail here too (then genops and the loader agree: a real break)."""
+    code = data[start : start + 1]
+    end = data.find(b"\n", start)
     if code not in (b"I", b"L") or end == -1:
-        return False
-    line = prefix[start + 1 : end]
+        return None
+    line = data[start + 1 : end]
     try:
         int(line.removesuffix(b"L") if code == b"L" else line, 0)
     except ValueError:
-        return False
-    return True
+        return None
+    return end + 1
+
+
+def _loader_reads_int(prefix: bytes, start: int) -> bool:
+    return recoverable_int_line(prefix, start) is not None
+
+
+def recoverable_global(data: bytes, start: int) -> tuple[str, str] | None:
+    """Another genops/loader gap: GLOBAL (c) and INST (i) read two lines with
+    readline()[:-1], which drops the final byte even with no trailing newline
+    at end of file. So `cos\\nsystemX` resolves os.system (the X is eaten),
+    which genops rejects for the missing newline. Returns (module, name) the
+    loader would resolve, or None when it would fail here too."""
+    if data[start : start + 1] not in (b"c", b"i"):
+        return None
+    nl = data.find(b"\n", start + 1)
+    if nl == -1:
+        return None  # no module line: the loader cannot resolve anything
+    rest = data[nl + 1 :]
+    name = rest[: rest.index(b"\n")] if b"\n" in rest else rest[:-1]  # readline()[:-1]
+    if not name:
+        return None
+    try:
+        module, name_str = data[start + 1 : nl].decode("utf-8"), name.decode("utf-8")
+    except UnicodeDecodeError:
+        return None  # a non-UTF-8 name: the loader's decode fails too
+    # Only importable names resolve; a CSV line "ity,population"/"Paris,4" fails
+    # to import, so the loader runs nothing (keeps text files out).
+    if _is_dotted_identifier(module) and _is_dotted_identifier(name_str):
+        return module, name_str
+    return None
 
 
 def _resolves_global(name: str, arg: object, str_pushes: int) -> bool:
@@ -178,11 +220,15 @@ def _resolves_global(name: str, arg: object, str_pushes: int) -> bool:
         # extension registry is empty unless the loading process fills it.
         return str_pushes >= 2
     if name in ("GLOBAL", "INST"):
-        # genops gives "module name". Only importable names can run anything;
-        # requiring them keeps text files starting with "c" or "i" out.
-        parts = str(arg).split(" ")
-        return len(parts) == 2 and all(_is_dotted_identifier(p) for p in parts)
+        return _importable(arg)
     return False
+
+
+def _importable(arg: object) -> bool:
+    """genops gives a GLOBAL/INST argument as "module name". Only dotted
+    identifiers can be imported; anything else makes the loader fail."""
+    parts = str(arg).split(" ")
+    return len(parts) == 2 and all(_is_dotted_identifier(p) for p in parts)
 
 
 # Opcodes that may leave a str on the stack, directly or from the memo.

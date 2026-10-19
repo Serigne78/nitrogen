@@ -13,6 +13,7 @@ checks that the committed files match what this script produces.
 import io
 import pickletools
 import struct
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -137,20 +138,40 @@ def framed(body: bytes) -> bytes:
     return proto(5) + b"\x95" + struct.pack("<Q", len(body)) + body
 
 
-def pytorch_zip(data_pkl: bytes) -> bytes:
+def zip_of(members: dict[str, bytes]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        for name, content in [
-            ("archive/data.pkl", data_pkl),
-            ("archive/version", b"3\n"),
-            ("archive/byteorder", b"little"),
-        ]:
+        for name, content in members.items():
             # Fixed timestamp and host system: both are stamped by zipfile and
             # would otherwise make the bytes differ across runs and OSes
             # (create_system is 0 on Windows, 3 on Unix).
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.create_system = 0
             zf.writestr(info, content)
+    return buf.getvalue()
+
+
+def pytorch_zip(data_pkl: bytes, **extra: bytes) -> bytes:
+    """A PyTorch archive; `extra` adds members (archive/<key>.pkl)."""
+    members = {
+        "archive/data.pkl": data_pkl,
+        "archive/version": b"3\n",
+        "archive/byteorder": b"little",
+    }
+    members.update({f"archive/{key}.pkl": value for key, value in extra.items()})
+    return zip_of(members)
+
+
+def legacy_tar(members: dict[str, bytes]) -> bytes:
+    """Pre-1.6 torch.save layout: a plain tar whose members are pickles."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:", format=tarfile.PAX_FORMAT) as tar:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            # Fixed metadata so the bytes are reproducible.
+            info.mtime, info.uid, info.gid, info.uname, info.gname = 0, 0, 0, "", ""
+            tar.addfile(info, io.BytesIO(content))
     return buf.getvalue()
 
 
@@ -204,6 +225,34 @@ _REALISTIC_TORCH_PICKLE = (
 )
 
 
+# A realistic NumPy array pickle (protocol 4, STACK_GLOBAL): the globals a real
+# np.save/np.ndarray.__reduce__ emits, all allowlisted. Guards against a false
+# positive after the allowlist was tightened.
+def _stack_global(module: str, name: str) -> bytes:
+    return short_binunicode(module) + short_binunicode(name) + STACK_GLOBAL
+
+
+_NUMPY_ARRAY_PICKLE = (
+    proto(4)
+    + _stack_global("numpy.core.multiarray", "_reconstruct")
+    + _stack_global("numpy", "ndarray")
+    + b"K\x00"  # shape arg (0)
+    + short_binunicode("b")
+    + TUPLE  # (ndarray, 0, b"b")
+    + REDUCE  # _reconstruct(ndarray, (0,), b"b")
+    + MARK  # __setstate__ args to follow (BUILD)
+    + b"K\x01"  # version
+    + TUPLE1
+    + _stack_global("numpy", "dtype")
+    + short_binunicode("f8")
+    + NEWFALSE
+    + NEWFALSE
+    + TUPLE  # (dtype, "f8", False, False)
+    + REDUCE  # numpy.dtype("f8", False, False)
+    + STOP
+)
+
+
 def corpus() -> dict[str, bytes]:
     files = {
         # --- dangerous imports, one mechanism each ---------------------------
@@ -217,6 +266,14 @@ def corpus() -> dict[str, bytes]:
         # --- opcode mechanisms -----------------------------------------------
         "posix_system_inst.pkl": MARK + string0(PAYLOAD.decode()) + inst("posix", "system") + STOP,
         "os_system_stack.pkl": call_stack("os", "system", PAYLOAD.decode()),
+        # INT/LONG base-prefixed: genops stops, the loader reads int(s, 0) and
+        # runs past it to os.system. A pickle with no PROTO magic.
+        "int_hex_bypass.pkl": b"I0x1\n" + call0("os", "system", PAYLOAD.decode()),
+        "long_hex_bypass.pkl": b"L0x1L\n" + call0("os", "system", PAYLOAD.decode()),
+        # GLOBAL/INST whose name line has no final newline at EOF: readline()[:-1]
+        # eats the trailing byte and the loader resolves it; genops stops short.
+        "inst_no_newline.pkl": MARK + string0(PAYLOAD.decode()) + b"ios\nsystemX",
+        "global_no_newline.pkl": b"cos\nsystemX",
         "os_system_framed.pkl": framed(
             global_op("os", "system") + MARK + string0(PAYLOAD.decode()) + TUPLE + REDUCE + STOP
         ),
@@ -250,6 +307,22 @@ def corpus() -> dict[str, bytes]:
         "functools_partial.pkl": call_stack("functools", "partial", PAYLOAD.decode()),
         # --- containers and concatenation ------------------------------------
         "pytorch_zip_os_system.pt": pytorch_zip(call0("os", "system", PAYLOAD.decode())),
+        # --- ADR 0004: every pickle member, EXT, legacy tar -------------------
+        "pytorch_zip_extra_pkl.pt": pytorch_zip(
+            _SAFE_PICKLE, extra=call0("os", "system", PAYLOAD.decode())
+        ),
+        "zip_with_pickle.zip": zip_of(
+            {"model/weights.pkl": call0("os", "system", PAYLOAD.decode())}
+        ),
+        "ext_copyreg.pkl": (
+            proto(2) + b"\x82\x2a" + MARK + string0(PAYLOAD.decode()) + TUPLE + REDUCE + STOP
+        ),
+        "legacy_tar_os_system.pt": legacy_tar(
+            {"pickle": call0("os", "system", PAYLOAD.decode()), "storages": b"\x80\x02K\x00."}
+        ),
+        "safe_legacy_tar.pt": legacy_tar(
+            {"pickle": _SAFE_PICKLE, "storages": b"\x80\x02K\x00.", "tensors": b"\x80\x02K\x00."}
+        ),
         "concatenated.pkl": (proto(2) + b"K\x01." + call0("os", "system", PAYLOAD.decode())),
         # --- malformed: reported, never ignored, never a crash ---------------
         "truncated.pkl": proto(2) + b"(K\x01",  # MARK, BININT1, no STOP
@@ -259,6 +332,7 @@ def corpus() -> dict[str, bytes]:
         "safe_allowlist.pkl": _SAFE_PICKLE,
         "safe_pytorch_zip.pt": pytorch_zip(_SAFE_PICKLE),
         "safe_pytorch_model.pt": pytorch_zip(_REALISTIC_TORCH_PICKLE),
+        "safe_numpy_array.pkl": _NUMPY_ARRAY_PICKLE,
         "safe_model.safetensors": safetensors(
             b'{"w":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}', bytes(8)
         ),
@@ -267,7 +341,16 @@ def corpus() -> dict[str, bytes]:
 
 
 # These are built to break a parser on purpose; genops need not accept them.
-MALFORMED = {"truncated.pkl", "oversized_length.pkl"}
+# genops cannot read these on purpose: the first two are broken, the last two
+# use int(s, 0) literals genops rejects but the real loader accepts.
+MALFORMED = {
+    "truncated.pkl",
+    "oversized_length.pkl",
+    "int_hex_bypass.pkl",
+    "long_hex_bypass.pkl",
+    "inst_no_newline.pkl",
+    "global_no_newline.pkl",
+}
 
 
 def _validate(data: bytes) -> None:
@@ -275,13 +358,25 @@ def _validate(data: bytes) -> None:
     list(pickletools.genops(io.BytesIO(data)))
 
 
+def _members(data: bytes) -> list[tuple[str, bytes]]:
+    """(name, content) of each archive member; empty for a non-archive."""
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            return [(n, zf.read(n)) for n in zf.namelist() if n.endswith(".pkl")]
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tar:
+            return [(m.name, tar.extractfile(m).read()) for m in tar.getmembers() if m.isfile()]  # type: ignore[union-attr]
+    except tarfile.TarError:
+        return []
+
+
 def main() -> None:
     for name, data in corpus().items():
         if name.endswith(".pkl") and name not in MALFORMED:
             _validate(data)
-        if name.endswith(".pt"):  # the data.pkl inside the zip must parse too
-            with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                _validate(zf.read("archive/data.pkl"))
+        for member, content in _members(data):  # pickles inside archives too
+            if member.endswith(".pkl") or "/" not in member:
+                _validate(content)
         (CORPUS / name).write_bytes(data)
     print(f"wrote {len(corpus())} corpus files to {CORPUS}")
 

@@ -218,3 +218,71 @@
   format: safetensors
   verdict: safe
   reason: a well-formed safetensors tensor map
+
+# --- ADR 0004 ---------------------------------------------------------------
+
+- file: pytorch_zip_extra_pkl.pt
+  format: pytorch-zip
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: data.pkl is safe, os.system sits in a second member (archive/extra.pkl)
+
+- file: zip_with_pickle.zip
+  format: zip
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: generic zip (no data.pkl) whose member is a pickle
+
+- file: ext_copyreg.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: copyreg extension 42
+  reason: EXT1 imports through the copyreg registry; unresolvable, hence not allowlisted
+
+- file: legacy_tar_os_system.pt
+  format: tar
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: pre-1.6 torch.save tar whose "pickle" member calls os.system
+
+- file: safe_legacy_tar.pt
+  format: tar
+  verdict: safe
+  reason: legacy tar whose members use only allowlisted globals
+
+- file: int_hex_bypass.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: INT "0x1" stops genops; the loader reads int(s,0) and runs os.system after it
+
+- file: long_hex_bypass.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: LONG "0x1L" stops genops; the loader runs os.system after it
+
+- file: inst_no_newline.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: INST name line has no final newline; readline()[:-1] resolves os.system
+
+- file: global_no_newline.pkl
+  format: pickle
+  verdict: risk
+  finding: pickle.import
+  detail: os.system
+  reason: GLOBAL name line has no final newline; the loader still resolves os.system
+
+- file: safe_numpy_array.pkl
+  format: pickle
+  verdict: safe
+  reason: a NumPy ndarray pickle using only allowlisted numpy globals

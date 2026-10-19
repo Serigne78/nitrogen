@@ -13,7 +13,7 @@ import typer
 
 from nitrogen import __version__
 from nitrogen.formats import Format
-from nitrogen.inventory import ANALYZED_FORMATS, FileEntry, inventory
+from nitrogen.inventory import FileEntry, inventory
 
 
 class ExitCode(IntEnum):
@@ -93,16 +93,7 @@ def _scan(path: Path, output: Path | None, policy: Path | None) -> ExitCode:
             typer.echo(f"  {_printable(str(file))}  [{finding.rule}] {finding.message}")
         typer.echo(f"Verdict: RISK ({_plural(len(findings), 'finding')})")
         return ExitCode.RISK
-    unanalyzed = [e for e in entries if e.formats - ANALYZED_FORMATS]
-    if unanalyzed:
-        # Pickle analysis comes in step 5: do not let COMPLIANT oversell.
-        formats = ", ".join(
-            sorted({str(f) for e in unanalyzed for f in e.formats - ANALYZED_FORMATS})
-        )
-        note = f"{_plural(len(unanalyzed), 'file')} ({formats}) not analyzed yet"
-        typer.echo(f"Verdict: COMPLIANT ({note})")
-    else:
-        typer.echo("Verdict: COMPLIANT")
+    typer.echo("Verdict: COMPLIANT")
     return ExitCode.COMPLIANT
 
 

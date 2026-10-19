@@ -170,7 +170,7 @@ def test_safetensors_whose_size_bytes_are_pickle_opcodes() -> None:
     # Low byte "." is STOP, "V" opens a line. A pickle loader would read these
     # bytes too, so both interpretations are kept (ADR 0003); the pickle
     # analysis decides whether that reading resolves anything.
-    assert _detect(_safetensors_sized(0x12E)) == {Format.PICKLE, Format.SAFETENSORS}
+    assert _detect(_safetensors_sized(0x12E)) == {Format.SAFETENSORS}  # empty pickle: unreadable
     assert _detect(_safetensors_sized(0x156)) == {Format.SAFETENSORS}  # line never ends
     big_header = _safetensors_sized(0x20056)  # "V" line running past the probe
     assert _detect(big_header) == {Format.PICKLE, Format.SAFETENSORS}
@@ -233,10 +233,11 @@ def test_safetensors_pickle_polyglot_has_both_formats() -> None:
     assert _detect(polyglot) == {Format.PICKLE, Format.SAFETENSORS}
 
 
-def test_safetensors_pickle_polyglot_after_a_stop_has_both_formats() -> None:
-    # Size bytes "." then "V": an empty first pickle, the payload in the second.
+def test_payload_after_an_empty_first_pickle_is_unreachable() -> None:
+    # Size bytes "." then "V": the first pickle is empty, and STOP on an empty
+    # stack makes every loader fail before the second pickle is ever read.
     polyglot = _safetensors_sized(0x562E, b"\n" + PICKLE_P0_GLOBAL)
-    assert _detect(polyglot) == {Format.PICKLE, Format.SAFETENSORS}
+    assert _detect(polyglot) == {Format.SAFETENSORS}
 
 
 def test_unknown_files() -> None:
@@ -298,3 +299,21 @@ def test_persid_first_is_not_a_pickle() -> None:
     # runs. A large safetensors whose size starts with "P" stays safetensors.
     assert _detect(b"Pid\n" + PICKLE_P0_GLOBAL) == set()
     assert _detect(_safetensors_sized(0x20050)) == {Format.SAFETENSORS}
+
+
+@pytest.mark.parametrize("size", [200, PROBE_SIZE * 2], ids=["small", "beyond-probe"])
+def test_wheel_record_file_is_not_a_pickle(size: int) -> None:
+    # dist-info/RECORD lines start with a package name, so "c" reads as GLOBAL.
+    # A loader stops at once on a module name that cannot exist: no format.
+    for line in (
+        b"coverage/__init__.py,sha256=Zm9vYmFy,1234\n",
+        b"../../Scripts/x.exe,sha256=Zm9v,9\n",
+    ):
+        record = (line * (size // len(line) + 1))[:size]
+        assert _detect(record) == set(), line
+
+
+def test_text_starting_with_a_dot_is_not_a_pickle() -> None:
+    # "." is STOP: an empty pickle, which no loader can read (stack underflow).
+    assert _detect(b".. -*- rest -*-\r\n\r\nAPI changes\n") == set()
+    assert _detect(b".") == set()

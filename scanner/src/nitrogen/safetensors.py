@@ -54,7 +54,7 @@ class _Malformed(Exception):
         self.rule = rule
 
 
-def check_safetensors(fh: BinaryIO, size: int) -> list[Finding]:
+def check_safetensors(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Finding]:
     """Validate a seekable safetensors stream of `size` bytes, left rewound."""
     fh.seek(0)
     try:

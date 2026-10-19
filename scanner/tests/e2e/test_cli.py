@@ -45,10 +45,10 @@ def test_scan_single_file(tmp_path: Path) -> None:
     model = tmp_path / "model.bin"
     model.write_bytes(b"\x80\x02K\x01.")
     result = runner.invoke(app, ["scan", str(model)])
-    assert result.exit_code == ExitCode.COMPLIANT
+    assert result.exit_code == ExitCode.COMPLIANT  # a harmless pickle, now analyzed
     assert "model.bin" in result.output
     assert "pickle" in result.output
-    assert "not analyzed yet" in result.output  # COMPLIANT must not oversell
+    assert "Verdict: COMPLIANT" in result.output
 
 
 def _safetensors(data: bytes) -> bytes:
