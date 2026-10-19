@@ -44,5 +44,10 @@ jobs:
       - name: pytest
         run: uv run pytest
 
-      - name: CLI smoke test
-        run: uv run nitrogen scan .
+      - name: CLI smoke test (clean tree -> exit 0)
+        run: uv run nitrogen scan src
+      - name: CLI smoke test (malicious corpus -> exit 1)
+        shell: bash
+        run: |
+          uv run nitrogen scan tests/corpus && code=0 || code=$?
+          test "$code" = "1" || { echo "expected exit 1 on the corpus, got $code"; exit 1; }
