@@ -13,7 +13,7 @@ import pickletools
 from typing import BinaryIO
 
 from nitrogen.allowlist import is_allowed
-from nitrogen.findings import Finding
+from nitrogen.findings import MAX_MESSAGE, BoundedFindings, Finding
 from nitrogen.formats import recoverable_global, recoverable_int_line
 
 # A pickle is read into memory before genops walks it, so an attacker-declared
@@ -47,7 +47,7 @@ def check_pickle(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[F
 def scan_pickle(
     data: bytes, *, sole_format: bool = True, capped: bool = False, source: str = ""
 ) -> list[Finding]:
-    findings: list[Finding] = []
+    findings = BoundedFindings()  # dedup + cap while walking: memory stays bounded
     # A broken stream is only trustworthy as "malformed" when the bytes are
     # unambiguously a pickle: a PROTO header, or an import already resolved.
     # A headless stream that breaks early (a RECORD file, a ruff cache blob) is
@@ -60,15 +60,15 @@ def scan_pickle(
         except (ValueError, IndexError) as exc:
             if sole_format and (has_proto or findings):
                 findings.append(_finding("pickle.malformed", str(exc), source))
-            return findings
+            return findings.result()
     if capped and not findings:
         findings.append(
             _finding("pickle.unanalyzable", f"pickle larger than {MAX_PICKLE_BYTES} bytes", source)
         )
-    return findings
+    return findings.result()
 
 
-def _walk_one(stream: io.BytesIO, findings: list[Finding], source: str) -> None:
+def _walk_one(stream: io.BytesIO, findings: BoundedFindings, source: str) -> None:
     """Walk a single pickle, up to and including its STOP."""
     stack: list[object] = []
     memo: dict[int, object] = {}
@@ -158,7 +158,7 @@ def _apply_stack_effect(
         stack.append(_MARK if item is pickletools.markobject else _OPAQUE)
 
 
-def _check_global_arg(arg: object, findings: list[Finding], source: str) -> None:
+def _check_global_arg(arg: object, findings: BoundedFindings, source: str) -> None:
     # genops gives a GLOBAL/INST argument as "module name".
     parts = str(arg).split(" ", 1)
     if len(parts) == 2:
@@ -167,12 +167,15 @@ def _check_global_arg(arg: object, findings: list[Finding], source: str) -> None
         findings.append(_finding("pickle.import", f"malformed global {arg!r}", source))
 
 
-def _check_global(module: object, name: object, findings: list[Finding], source: str) -> None:
+def _check_global(module: object, name: object, findings: BoundedFindings, source: str) -> None:
     if not isinstance(module, str) or not isinstance(name, str):
         # STACK_GLOBAL whose names we could not rebuild: cannot vouch for it.
         findings.append(_finding("pickle.import", "unresolved dynamic global", source))
     elif not is_allowed(module, name):
-        findings.append(_finding("pickle.import", f"{module}.{name}", source))
+        # Truncate before formatting: a 1 MB memoized name reused a million
+        # times must not be copied a million times.
+        detail = f"{module[:MAX_MESSAGE]}.{name[:MAX_MESSAGE]}"
+        findings.append(_finding("pickle.import", detail, source))
 
 
 def _as_text(arg: object) -> object:
@@ -181,7 +184,16 @@ def _as_text(arg: object) -> object:
             return bytes(arg).decode("utf-8")
         except UnicodeDecodeError:
             return _OPAQUE
-    return arg if isinstance(arg, str) else _OPAQUE
+    if not isinstance(arg, str):
+        return _OPAQUE
+    # pickletools decodes with surrogatepass: a lone surrogate is no name any
+    # loader imports, and would break UTF-8 output later. Treat it as opaque,
+    # so a STACK_GLOBAL using it is still flagged ("unresolved").
+    try:
+        arg.encode("utf-8")
+    except UnicodeEncodeError:
+        return _OPAQUE
+    return arg
 
 
 def _finding(rule: str, detail: str, source: str) -> Finding:

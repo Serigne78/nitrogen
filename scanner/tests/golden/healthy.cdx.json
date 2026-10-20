@@ -1,0 +1,149 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "file:config.json",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "66b63d89710dd56786a2b9f1c6c9ae9c3f67069a3e20428c25ca0854018ee465"
+        }
+      ],
+      "name": "config.json",
+      "properties": [
+        {
+          "name": "nitrogen:analyzed",
+          "value": "true"
+        },
+        {
+          "name": "nitrogen:size",
+          "value": "27"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:safe_model.safetensors",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c725cce4a2a7bf1d67898a30298f2c6efa578b0c445916216cfa1dec969ca388"
+        }
+      ],
+      "name": "safe_model.safetensors",
+      "properties": [
+        {
+          "name": "nitrogen:format",
+          "value": "safetensors"
+        },
+        {
+          "name": "nitrogen:analyzed",
+          "value": "true"
+        },
+        {
+          "name": "nitrogen:size",
+          "value": "70"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:safe_numpy_array.pkl",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "69f998d4b9de968248dc99849ac8a4fb194b294ae7b7ac9df7aaa9c49fab6d77"
+        }
+      ],
+      "name": "safe_numpy_array.pkl",
+      "properties": [
+        {
+          "name": "nitrogen:format",
+          "value": "pickle"
+        },
+        {
+          "name": "nitrogen:analyzed",
+          "value": "true"
+        },
+        {
+          "name": "nitrogen:size",
+          "value": "92"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:safe_pytorch_model.pt",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c35aa018484a9df1f4d7951e8940454ff42bbf6c0803ebaf54ef111711570986"
+        }
+      ],
+      "name": "safe_pytorch_model.pt",
+      "properties": [
+        {
+          "name": "nitrogen:format",
+          "value": "pytorch-zip"
+        },
+        {
+          "name": "nitrogen:analyzed",
+          "value": "true"
+        },
+        {
+          "name": "nitrogen:size",
+          "value": "476"
+        }
+      ],
+      "type": "file"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "file:config.json",
+        "file:safe_model.safetensors",
+        "file:safe_numpy_array.pkl",
+        "file:safe_pytorch_model.pt"
+      ],
+      "ref": "model"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "model",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4c61a57c7b6f2b718a8c82965ed60756723a42166713611fcaa3f3254912cdc6"
+        }
+      ],
+      "name": "my-model",
+      "properties": [
+        {
+          "name": "nitrogen:verdict",
+          "value": "compliant"
+        },
+        {
+          "name": "nitrogen:digest",
+          "value": "nitrogen-manifest-v1"
+        },
+        {
+          "name": "nitrogen:policy",
+          "value": "none"
+        }
+      ],
+      "type": "machine-learning-model"
+    },
+    "tools": {
+      "components": [
+        {
+          "name": "nitrogen",
+          "type": "application"
+        }
+      ]
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

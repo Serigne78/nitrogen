@@ -12,8 +12,10 @@ from typing import Annotated
 import typer
 
 from nitrogen import __version__
+from nitrogen.aibom import build_aibom, write_aibom
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry, inventory
+from nitrogen.policy import Policy, apply_policy, load_policy
 
 
 class ExitCode(IntEnum):
@@ -65,7 +67,7 @@ def scan(
     try:
         code = _scan(path, output, policy)
     except Exception as exc:
-        typer.echo(f"error: {exc}", err=True)
+        typer.echo(f"error: {_printable(str(exc))}", err=True)
         code = ExitCode.ERROR
     except SystemExit as exc:
         # A sys.exit() buried in a dependency would otherwise leak its own
@@ -76,25 +78,73 @@ def scan(
     raise typer.Exit(code)
 
 
-def _scan(path: Path, output: Path | None, policy: Path | None) -> ExitCode:
+def _scan(path: Path, output: Path | None, policy_path: Path | None) -> ExitCode:
+    # Fail fast: everything that can fail for sure is checked before the scan,
+    # which can take minutes on a large model.
     if not path.exists():
         raise FileNotFoundError(f"no such file or directory: {path}")
-    if policy is not None and not policy.is_file():
-        raise FileNotFoundError(f"policy file not found: {policy}")
+    if policy_path is not None and not policy_path.is_file():
+        raise FileNotFoundError(f"policy file not found: {policy_path}")
     if output is not None:
-        raise NotImplementedError("AI-BOM output (-o) is not implemented yet")
+        _check_output(path, output)
+    policy = load_policy(policy_path) if policy_path is not None else Policy()
 
-    entries = inventory(path)
+    entries = apply_policy(policy, inventory(path))
+    if output is not None:
+        _check_output_not_scanned(path, output, entries)
     _print_inventory(path, entries)
     findings = [(e.path, f) for e in entries for f in e.findings]
     if findings:
         typer.echo("Findings:")
         for file, finding in findings:
-            typer.echo(f"  {_printable(str(file))}  [{finding.rule}] {finding.message}")
+            # The message carries attacker-chosen names: escaped like the path.
+            line = _printable(f"[{finding.rule}] {finding.message}")
+            typer.echo(f"  {_printable(str(file))}  {line}")
+    if output is not None:
+        # Written for both verdicts: the evidence of a refusal matters too.
+        write_aibom(output, build_aibom(path.resolve().name or str(path), entries, policy))
+        typer.echo(f"AI-BOM: {_printable(str(output))}")
+    if findings:
         typer.echo(f"Verdict: RISK ({_plural(len(findings), 'finding')})")
         return ExitCode.RISK
     typer.echo("Verdict: COMPLIANT")
     return ExitCode.COMPLIANT
+
+
+def _check_output(scanned: Path, output: Path) -> None:
+    """Refuse, before scanning, an AI-BOM target that would overwrite the
+    model or land inside the scanned tree (a later scan would hash a stale
+    AI-BOM, and its digest would describe files that no longer exist)."""
+    if not output.parent.is_dir():
+        raise FileNotFoundError(f"output directory not found: {output.parent}")
+    if output.is_dir():
+        raise IsADirectoryError(f"output is a directory: {output}")
+    target, root = output.resolve(), scanned.resolve()
+    inside = target == root or (root.is_dir() and target.is_relative_to(root))
+    # samefile also catches the same directory reached another way: different
+    # case on a case-insensitive volume, a bind mount.
+    if not inside and root.is_dir():
+        inside = any(_same(ancestor, root) for ancestor in (target.parent, *target.parents))
+    if not inside and target.exists():
+        inside = _same(target, root)
+    if inside:
+        raise ValueError(f"output must be outside the scanned path: {output}")
+
+
+def _check_output_not_scanned(scanned: Path, output: Path, entries: list[FileEntry]) -> None:
+    """After the inventory: refuse a target that is the real file behind a
+    scanned symlink (a Hugging Face snapshot points into blobs/)."""
+    base = scanned if scanned.is_dir() else scanned.parent
+    target = output.resolve()
+    if any((base / e.path).resolve() == target for e in entries):
+        raise ValueError(f"output is a file of the scanned model: {output}")
+
+
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
 
 
 def _plural(count: int, noun: str) -> str:

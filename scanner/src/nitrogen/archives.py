@@ -12,7 +12,7 @@ import tarfile
 import zipfile
 from typing import BinaryIO
 
-from nitrogen.findings import Finding
+from nitrogen.findings import BoundedFindings, Finding
 from nitrogen.formats import Format, detect_formats
 from nitrogen.pickle_scan import scan_pickle
 
@@ -54,7 +54,9 @@ def check_tar(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Find
 
 
 def _scan_members(members: list[tuple[str, int]], read: object) -> list[Finding]:
-    findings: list[Finding] = []
+    # Bounded while walking: an archive of many members cannot pile up
+    # millions of findings before the per-file cap applies.
+    findings = BoundedFindings()
     total = 0
     for name, declared_size in members:
         if declared_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
@@ -69,5 +71,5 @@ def _scan_members(members: list[tuple[str, int]], read: object) -> list[Finding]
         if formats & {Format.ZIP, Format.PYTORCH_ZIP, Format.TAR}:
             findings.append(Finding("pickle.unanalyzable", f"{name}: nested archive not scanned"))
         elif Format.PICKLE in formats:
-            findings += scan_pickle(data, sole_format=True, source=name)
-    return findings
+            findings.absorb(scan_pickle(data, sole_format=True, source=name))
+    return findings.result()

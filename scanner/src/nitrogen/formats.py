@@ -34,6 +34,30 @@ class Format(StrEnum):
     ZIP = "zip"
     TAR = "tar"  # pre-1.6 torch.save: torch.load still unpickles its members
     SAFETENSORS = "safetensors"
+    # Model formats recognised but not analyzed in v0.1 (ADR 0006): a policy
+    # can refuse them, and the AI-BOM marks them nitrogen:analyzed=false.
+    HDF5 = "hdf5"
+    GGUF = "gguf"
+    NPY = "npy"
+    ONNX = "onnx"
+
+
+# Signature plus a plausible version, so that a README starting with "GGUF"
+# is not taken for a GGUF file.
+_UNANALYZED_MAGICS = (
+    (b"\x89HDF\r\n\x1a\n", Format.HDF5),
+    *((b"GGUF" + bytes([v, 0, 0, 0]), Format.GGUF) for v in (1, 2, 3)),
+    *((b"\x93NUMPY" + bytes([v]), Format.NPY) for v in (1, 2, 3)),
+)
+
+
+def _is_onnx(prefix: bytes) -> bool:
+    """ONNX is protobuf, with no magic: field 1 (ir_version, tag 0x08) first,
+    a small version, and an exporter trace early in the file. A heuristic."""
+    if len(prefix) < 2 or prefix[0] != 0x08 or not 1 <= prefix[1] <= 15:
+        return False
+    head = prefix[:4096].lower()
+    return b"onnx" in head or b"pytorch" in head
 
 
 def detect_formats(fh: BinaryIO) -> frozenset[Format]:
@@ -60,6 +84,9 @@ def _detect(fh: BinaryIO) -> frozenset[Format]:
         formats.add(Format.TAR)
     if _is_safetensors(prefix, size):
         formats.add(Format.SAFETENSORS)
+    formats.update(fmt for magic, fmt in _UNANALYZED_MAGICS if prefix.startswith(magic))
+    if _is_onnx(prefix):
+        formats.add(Format.ONNX)
     return frozenset(formats)
 
 

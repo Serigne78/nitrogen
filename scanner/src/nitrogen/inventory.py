@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from nitrogen.archives import check_tar, check_zip
-from nitrogen.findings import Finding
+from nitrogen.findings import Finding, bounded
 from nitrogen.formats import Format, detect_formats
 from nitrogen.pickle_scan import check_pickle
 from nitrogen.safetensors import check_safetensors
@@ -116,7 +116,9 @@ def _entry(rel: PurePosixPath, path: Path) -> FileEntry:
             # Every interpretation is analyzed, in a fixed order (ADR 0003).
             # A polyglot's parse errors are suppressed (sole_format=False).
             sole = len(formats) == 1
-            findings = tuple(
+            # Bounded per file: an archive with many members, or an analyzer
+            # with many findings, cannot exhaust memory (see findings.py).
+            findings = bounded(
                 finding
                 for fmt in sorted(formats)
                 if (analyzer := _ANALYZERS.get(fmt))

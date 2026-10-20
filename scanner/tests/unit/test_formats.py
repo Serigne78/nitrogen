@@ -244,7 +244,8 @@ def test_unknown_files() -> None:
     assert _detect(b"") == set()
     assert _detect(b'{"architectures": ["Bert"]}') == set()
     assert _detect(b"README\n") == set()
-    assert _detect(b"GGUF\x03\x00\x00\x00") == set()
+    # A README that merely starts with "GGUF" is not a GGUF file (ADR 0006).
+    assert _detect(b"GGUF quantized versions of this model\n") == set()
 
 
 def test_extension_is_ignored(tmp_path: Path) -> None:
@@ -317,3 +318,22 @@ def test_text_starting_with_a_dot_is_not_a_pickle() -> None:
     # "." is STOP: an empty pickle, which no loader can read (stack underflow).
     assert _detect(b".. -*- rest -*-\r\n\r\nAPI changes\n") == set()
     assert _detect(b".") == set()
+
+
+@pytest.mark.parametrize(
+    ("data", "fmt"),
+    [
+        (b"\x89HDF\r\n\x1a\n" + bytes(100), Format.HDF5),
+        (b"GGUF\x03\x00\x00\x00" + bytes(100), Format.GGUF),
+        (b"\x93NUMPY\x01\x00v\x00{'descr': '<f8'}" + bytes(100), Format.NPY),
+        (b"\x08\x07\x12\x07pytorch\x1a\x032.1" + bytes(100), Format.ONNX),
+    ],
+    ids=["hdf5", "gguf", "npy", "onnx"],
+)
+def test_unanalyzed_model_formats_are_recognised(data: bytes, fmt: Format) -> None:
+    # ADR 0006: recognised by magic, not analyzed, so "unknown" no longer hides them.
+    assert fmt in _detect(data)
+
+
+def test_onnx_heuristic_needs_an_exporter_trace() -> None:
+    assert Format.ONNX not in _detect(b"\x08\x07" + bytes(200))

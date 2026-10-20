@@ -139,7 +139,10 @@ def test_scan_accepts_existing_policy(tmp_path: Path) -> None:
     assert result.exit_code == ExitCode.COMPLIANT
 
 
-def test_scan_output_not_implemented_is_error(tmp_path: Path) -> None:
-    result = runner.invoke(app, ["scan", str(tmp_path), "-o", str(tmp_path / "bom.cdx.json")])
+def test_scan_output_into_missing_directory_is_error_before_scanning(tmp_path: Path) -> None:
+    # Fail fast: checked before the (possibly long) scan, nothing written.
+    target = tmp_path / "nope" / "bom.cdx.json"
+    result = runner.invoke(app, ["scan", str(tmp_path), "-o", str(target)])
     assert result.exit_code == ExitCode.ERROR
-    assert not (tmp_path / "bom.cdx.json").exists()
+    assert not target.exists()
+    assert "Scanned:" not in result.output

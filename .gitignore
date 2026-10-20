@@ -24,3 +24,5 @@ htmlcov/
 Thumbs.db
 .vscode/
 .idea/
+# Reference AI-BOMs are test fixtures, not generated output.
+!scanner/tests/golden/*.cdx.json
