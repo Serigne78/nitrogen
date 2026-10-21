@@ -185,6 +185,10 @@ def _reads_as_pickle(prefix: bytes, *, file_continues: bool) -> bool:
                 # A module/name that cannot exist (a CSV line, prose) makes the
                 # loader fail right here: nothing after it runs, no pickle.
                 return False
+            if opcode.name == "STACK_GLOBAL" and str_pushes < 2 and not reached_stop:
+                # Pops two names off the stack; with fewer pushed, the loader
+                # crashes here (a .npy begins with \x93NUMPY). Nothing runs.
+                return False
             if _resolves_global(opcode.name, arg, str_pushes):
                 return True
             str_pushes += opcode.name in _MAY_PUSH_STR

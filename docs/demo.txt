@@ -1,0 +1,23 @@
+# Nitrogen demo — a clean model passes, a trapped one is caught.
+
+## A healthy model
+
+$ nitrogen scan ./bert-model
+Scanned: ./bert-model (N files)
+FILE               FORMAT       SIZE  SHA-256
+config.json        unknown        34  bfa2b2c6fcd5ed550d722c632cefb9d91912ffbc6ca08c7bde03f4da0732f2aa
+model.safetensors  safetensors    70  c725cce4a2a7bf1d67898a30298f2c6efa578b0c445916216cfa1dec969ca388
+Verdict: COMPLIANT
+(exit 0)
+
+## A model with a malicious pickle
+
+$ nitrogen scan ./bert-model -o bom.cdx.json
+Scanned: ./bert-model (N files)
+FILE               FORMAT  SIZE  SHA-256
+pytorch_model.bin  pickle    32  efbc9b9a4fef6f2111a9b2a9fdcbd8d6fae7f030f0a2329bc1247a96e5414614
+Findings:
+  pytorch_model.bin  [pickle.import] os.system
+AI-BOM: bom.cdx.json
+Verdict: RISK (1 finding)
+(exit 1)

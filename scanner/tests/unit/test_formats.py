@@ -337,3 +337,19 @@ def test_unanalyzed_model_formats_are_recognised(data: bytes, fmt: Format) -> No
 
 def test_onnx_heuristic_needs_an_exporter_trace() -> None:
     assert Format.ONNX not in _detect(b"\x08\x07" + bytes(200))
+
+
+def test_stack_global_on_empty_stack_is_not_a_pickle() -> None:
+    # \x93 (STACK_GLOBAL) first pops two items off an empty stack: the real
+    # loader fails at once, nothing runs. A real .npy starts with \x93NUMPY,
+    # so this must not be read as a pickle (reviewer step 7, I1).
+    assert _detect(b"\x93.") == set()
+    assert _detect(b"\x93NUMPY\x01\x00.") == {Format.NPY}
+
+
+def test_real_numpy_file_is_only_npy(tmp_path: Path) -> None:
+    import numpy as np
+
+    p = tmp_path / "w.npy"
+    np.save(p, np.arange(60, dtype=np.uint8).reshape(3, 4, 5))
+    assert _detect(p.read_bytes()) == {Format.NPY}

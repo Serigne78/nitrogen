@@ -18,9 +18,9 @@ Comme tout modèle réel contient un `config.json`, toute policy réaliste devai
 ## Décision
 Option 2. Formats reconnus, non analysés en v0.1 :
 - `hdf5` : `\x89HDF\r\n\x1a\n` à l'offset 0 (Keras `.h5`) ;
-- `gguf` : `GGUF` à l'offset 0 ;
+- `gguf` : `GGUF` à l'offset 0, suivi d'une version `1`, `2` ou `3` (little-endian), pour ne pas prendre un README qui commence par « GGUF » pour un fichier GGUF. Une version future (0 ou ≥ 4) ne serait pas reconnue et retomberait en `unknown` ;
 - `npy` : `\x93NUMPY` à l'offset 0 ;
-- `onnx` : protobuf commençant par le champ `ir_version` (`\x08` puis une version de 1 à 15) et contenant la trace d'un exportateur ONNX ou PyTorch dans ses 4 premiers Kio. C'est une heuristique : ONNX n'a pas de magic.
+- `onnx` : protobuf commençant par le champ `ir_version` (`\x08` puis une version de 1 à 15) et contenant la trace d'un exportateur ONNX ou PyTorch dans ses 4 premiers Kio. C'est une **heuristique**, avec deux limites assumées : l'ordre des champs protobuf n'est pas garanti par la spec (un ONNX dont `ir_version` n'est pas le premier champ n'est pas reconnu), et un exportateur sans trace `onnx`/`pytorch` (tf2onnx, skl2onnx…) non plus. Un tel fichier retombe en `unknown`. ONNX reste hors du périmètre d'analyse v0.1 ; cette reconnaissance est un filet, pas une garantie.
 
 ## Conséquences
 - Le périmètre d'**analyse** de la v0.1 ne change pas. Ces formats sont seulement reconnus, et marqués `nitrogen:analyzed=false`.

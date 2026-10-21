@@ -66,3 +66,10 @@ def test_polyglot_parse_error_is_suppressed() -> None:
     assert [f.message for f in scan_pickle(b"cos\nsystem\n(S'x'\ntR.", sole_format=False)] == [
         "os.system"
     ]
+
+
+def test_stack_global_on_empty_stack_resolves_nothing() -> None:
+    # The loader crashes on STACK_GLOBAL with an empty stack before resolving
+    # anything: no import finding (reviewer step 7, I1).
+    assert "unresolved dynamic global" not in _details(b"\x93.")
+    assert "unresolved dynamic global" not in _details(b"\x80\x04\x93.")

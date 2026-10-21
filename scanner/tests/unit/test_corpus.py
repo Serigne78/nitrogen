@@ -23,7 +23,7 @@ BY_FILE = {case["file"]: case for case in CASES}
 
 def _corpus_files() -> list[Path]:
     return sorted(
-        p for p in CORPUS.iterdir() if p.suffix in (".pkl", ".pt", ".zip", ".safetensors")
+        p for p in CORPUS.iterdir() if p.suffix in (".pkl", ".pt", ".zip", ".safetensors", ".npy")
     )
 
 
@@ -158,4 +158,6 @@ def _pickle_streams(data: bytes) -> list[bytes]:
         pass
     if len(data) >= 8 and data[8:9] == b"{":
         return []  # safetensors: no embedded pickle
+    if data.startswith(b"\x93NUMPY"):
+        return []  # a .npy array holds no pickle (its \x93 is just the magic)
     return [data]

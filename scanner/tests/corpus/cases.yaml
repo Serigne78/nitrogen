@@ -286,3 +286,8 @@
   format: pickle
   verdict: safe
   reason: a NumPy ndarray pickle using only allowlisted numpy globals
+
+- file: safe_numpy_file.npy
+  format: npy
+  verdict: safe
+  reason: a healthy NumPy .npy; its \x93 magic must not read as a pickle

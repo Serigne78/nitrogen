@@ -127,6 +127,10 @@ def _walk_one(stream: io.BytesIO, findings: BoundedFindings, source: str) -> Non
             _check_global_arg(arg, findings, source)
             _apply_stack_effect(opcode, stack, pop_to_mark)
         elif name == "STACK_GLOBAL":
+            if len(stack) < 2:
+                # The loader pops two items off an empty stack and crashes here,
+                # before resolving anything (a .npy starts with \x93NUMPY).
+                raise ValueError("STACK_GLOBAL on an underflowed stack")
             n, module = pop(), pop()
             _check_global(module, n, findings, source)
             push(_OPAQUE)

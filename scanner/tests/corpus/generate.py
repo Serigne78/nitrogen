@@ -179,6 +179,14 @@ def safetensors(header: bytes, data: bytes = b"") -> bytes:
     return struct.pack("<Q", len(header)) + header + data
 
 
+def npy_file() -> bytes:
+    """A minimal, valid NumPy .npy by hand (format 1.0). Its magic \\x93NUMPY
+    starts with STACK_GLOBAL (0x93): a healthy array must not read as a pickle."""
+    header = b"{'descr': '|u1', 'fortran_order': False, 'shape': (8,), }"
+    header += b" " * ((64 - (10 + len(header) + 1) % 64) % 64) + b"\n"  # pad to 64-byte align
+    return b"\x93NUMPY\x01\x00" + struct.pack("<H", len(header)) + header + bytes(8)
+
+
 # --- the corpus ---------------------------------------------------------------
 
 # A safe pickle references only names a real PyTorch checkpoint uses; these are
@@ -333,6 +341,7 @@ def corpus() -> dict[str, bytes]:
         "safe_pytorch_zip.pt": pytorch_zip(_SAFE_PICKLE),
         "safe_pytorch_model.pt": pytorch_zip(_REALISTIC_TORCH_PICKLE),
         "safe_numpy_array.pkl": _NUMPY_ARRAY_PICKLE,
+        "safe_numpy_file.npy": npy_file(),
         "safe_model.safetensors": safetensors(
             b'{"w":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}', bytes(8)
         ),

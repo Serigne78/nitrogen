@@ -2,7 +2,7 @@
 
 Sécurité de la supply chain et du runtime des modèles d'IA déployés sur Kubernetes.
 
-> Statut : en développement (v0.1 en cours, scanner uniquement). Ne pas utiliser en production.
+> Statut : v0.1.0, scanner uniquement — pré-release. L'admission (webhook) et le runtime ne sont pas encore implémentés. À ce stade, Nitrogen analyse un modèle ; il ne constitue pas à lui seul la chaîne de confiance décrite ci-dessous.
 
 Les équipes téléchargent des modèles (Hugging Face, S3, registries internes) et les font tourner sans savoir ce qu'ils contiennent. Un fichier pickle ou PyTorch peut exécuter du code au chargement. Nitrogen couvre trois moments :
 
@@ -22,6 +22,8 @@ cosign attest --predicate bom.cdx.json --type cyclonedx <modèle>
 ```
 
 Codes de sortie : `0` conforme, `1` risque détecté, `2` erreur d'exécution.
+
+Démonstration : [`docs/demo.txt`](docs/demo.txt). Comparaison face à picklescan et ModelScan : [`scanner/README.md`](scanner/README.md#comparaison).
 
 ## Structure
 
