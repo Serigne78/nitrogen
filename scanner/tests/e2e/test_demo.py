@@ -18,8 +18,10 @@ runner = CliRunner()
 
 def _render(display: str, model: Path, *args: str) -> str:
     result = runner.invoke(app, ["scan", str(model), *args])
-    # Make the transcript stable: temp paths and the file count vary per run.
+    # Make the transcript stable across runs and OSes: temp paths, the file
+    # count and the line endings all vary otherwise.
     output = result.output.replace(str(model), "./bert-model").replace("\\", "/")
+    output = output.replace("\r\n", "\n")
     output = re.sub(r"\(\d+ files?\)", "(N files)", output)
     output = re.sub(r"AI-BOM: .*", "AI-BOM: bom.cdx.json", output)
     return f"$ {display}\n{output}(exit {result.exit_code})\n"
@@ -53,5 +55,6 @@ def test_demo_transcript_is_current(tmp_path: Path) -> None:
     transcript = _transcript(tmp_path)
     if os.environ.get("NITROGEN_UPDATE_DEMO") == "1":
         DEMO.parent.mkdir(exist_ok=True)
-        DEMO.write_text(transcript, encoding="utf-8")
-    assert transcript == DEMO.read_text(encoding="utf-8"), "stale; see module docstring"
+        DEMO.write_text(transcript, encoding="utf-8", newline="\n")
+    current = DEMO.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert transcript == current, "stale; see module docstring"
