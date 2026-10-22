@@ -62,7 +62,13 @@ def _scan_members(members: list[tuple[str, int]], read: object) -> list[Finding]
         if declared_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
             findings.append(Finding("pickle.unanalyzable", f"{name}: member too large to scan"))
             continue
-        data = read(name)[: MAX_MEMBER_BYTES + 1]  # type: ignore[operator]
+        try:
+            data = read(name)[: MAX_MEMBER_BYTES + 1]  # type: ignore[operator]
+        except Exception as exc:
+            # An unreadable member (password-protected, corrupt) is not a pass:
+            # it is exactly where a payload would hide. Flag, never raise.
+            findings.append(Finding("pickle.unanalyzable", f"{name}: cannot read member ({exc})"))
+            continue
         total += len(data)
         if len(data) > MAX_MEMBER_BYTES:
             findings.append(Finding("pickle.unanalyzable", f"{name}: member too large to scan"))

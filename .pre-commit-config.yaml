@@ -5,12 +5,12 @@ repos:
     hooks:
       - id: check-yaml
       - id: check-toml
-      # The corpus holds exact bytes (hand-written pickles); a fixer that adds
-      # a trailing newline would corrupt them and make generate.py disagree.
+      # Test fixtures hold exact bytes (hand-written pickles, vendored samples);
+      # a fixer adding a trailing newline would corrupt them.
       - id: end-of-file-fixer
-        exclude: ^scanner/tests/corpus/[^/]+\.(pkl|pt|safetensors)$
+        exclude: ^scanner/tests/(corpus/[^/]+\.(pkl|pt|safetensors|npy)|vendor/)
       - id: trailing-whitespace
-        exclude: ^scanner/tests/corpus/[^/]+\.(pkl|pt|safetensors)$
+        exclude: ^scanner/tests/(corpus/[^/]+\.(pkl|pt|safetensors|npy)|vendor/)
       - id: check-added-large-files
 
   - repo: local

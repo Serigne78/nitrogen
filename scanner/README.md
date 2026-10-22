@@ -25,14 +25,30 @@ Principe : **allowlist, pas denylist**. Tout import qui n'est pas explicitement 
 
 ## Comparaison
 
-Sur le corpus de test du projet (`tests/corpus/`, 36 cas malveillants et 7 sains), via `scripts/benchmark.py` :
+Deux mesures, pour rester honnête (ADR 0007). La profondeur se mesure sur un corpus **tiers** que nous n'avons pas conçu : les fixtures de test de picklescan (son propre terrain), vendorées sous `tests/vendor/`.
 
-| Outil | Détectés (sur 36) | Faux positifs (sur 7) |
+**Profondeur** — sur le corpus de picklescan (37 cas malveillants, 4 sains), via `scripts/benchmark_neutral.py` :
+
+| Outil | Détectés | Faux positifs |
 |---|---|---|
-| Nitrogen | 36 | 0 |
-| picklescan 1.0.5 | 26 | 0 |
-| ModelScan 0.8.8 | 24 | 0 |
+| Nitrogen | 36/37 | 1/4 |
+| picklescan 1.0.5 | 34/37 | 0/4 |
+| ModelScan 0.8.8 | 25/37 | 0/4 |
 
-Les cas que picklescan et ModelScan manquent sont les contournements que le corpus exerce : noms passés par le memo (`PUT`/`GET`, `LONG_BINPUT`), entiers en base 0, `GLOBAL`/`INST` sans saut de ligne final, opcodes `EXT`, pickle caché dans un membre de zip autre que `data.pkl`, tar hérité, `torch.serialization.load`.
+Le seul cas raté par les trois outils est un `.pt` tronqué de 8 octets. Notre unique « faux positif » est un `benign_password_protected.zip` : nous refusons de certifier un membre chiffré qu'on ne peut pas lire (`pickle.unanalyzable`, choix *fail-closed*), là où picklescan le laisse passer. C'est un parti pris de prudence, pas un bug.
 
-**Ce comparatif est biaisé** : le corpus a été conçu autour de ce que Nitrogen sait détecter. picklescan et ModelScan couvrent par ailleurs des formats hors du périmètre v0.1 de Nitrogen (TensorFlow/Keras, entre autres). Le tableau mesure la robustesse de l'analyse pickle, pas la couverture générale.
+**Largeur** — formats réellement analysés :
+
+| Format | Nitrogen | picklescan | ModelScan |
+|---|---|---|---|
+| pickle / zip PyTorch / tar | oui | oui | oui |
+| safetensors | oui | non | non |
+| TensorFlow SavedModel | non | non | oui |
+| Keras / HDF5 | non | non | oui |
+| remote code (`.py`, `trust_remote_code`) | non | non | non |
+
+En résumé : sur l'analyse pickle, Nitrogen est au niveau des meilleurs ; sur la largeur des formats, ModelScan couvre davantage (TensorFlow, Keras), hors du périmètre v0.1 de Nitrogen.
+
+**Faux positifs sur de vrais modèles** : `scripts/false_positives.py` télécharge quelques petits modèles Hugging Face (dont un vrai `pytorch_model.bin`) et les scanne — 0 faux positif sur l'échantillon testé. Script manuel (réseau), hors de la suite de tests.
+
+Un tableau sur notre propre corpus (où Nitrogen fait 36/36) reste disponible via `scripts/benchmark.py`, mais il est biaisé en notre faveur et ne sert qu'à suivre les non-régressions.
