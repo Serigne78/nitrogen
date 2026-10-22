@@ -28,7 +28,9 @@ from nitrogen.inventory import FileEntry
 MAX_POLICY_BYTES = 64 * 1024
 UNKNOWN = "unknown"  # pseudo-format: no supported loader reads the file
 FORMAT_NAMES = frozenset({f.value for f in Format} | {UNKNOWN})
-_KEYS = frozenset({"allow_formats"})
+# Severities a policy may escalate: never "risk" (always blocking already).
+ESCALATABLE = frozenset({"warning", "info"})
+_KEYS = frozenset({"allow_formats", "fail_on", "allow"})
 
 
 class PolicyError(Exception):
@@ -38,6 +40,8 @@ class PolicyError(Exception):
 @dataclass(frozen=True)
 class Policy:
     allow_formats: frozenset[str] | None = None  # None: no format restriction
+    fail_on: frozenset[str] = frozenset()  # severities made blocking (e.g. warning)
+    allow: frozenset[str] = frozenset()  # finding rules to neutralise
     sha256: str | None = None  # of the policy file, recorded in the AI-BOM
 
 
@@ -83,9 +87,31 @@ def load_policy(path: Path) -> Policy:
     unknown = set(document) - _KEYS
     if unknown:
         raise PolicyError(f"unknown policy key(s): {sorted(map(str, unknown))}")
-    if "allow_formats" not in document:
-        return Policy(sha256=sha256)
-    return Policy(_formats(document["allow_formats"]), sha256)
+    allow_formats = _formats(document["allow_formats"]) if "allow_formats" in document else None
+    return Policy(
+        allow_formats=allow_formats,
+        fail_on=_fail_on(document.get("fail_on")),
+        allow=_str_list("allow", document.get("allow")),
+        sha256=sha256,
+    )
+
+
+def _str_list(key: str, value: object) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise PolicyError(f"{key} must be a list of strings")
+    return frozenset(value)
+
+
+def _fail_on(value: object) -> frozenset[str]:
+    severities = _str_list("fail_on", value)
+    bad = sorted(severities - ESCALATABLE)
+    if bad:
+        raise PolicyError(
+            f"fail_on severities {bad}; allowed: {sorted(ESCALATABLE)} (risk always blocks)"
+        )
+    return severities
 
 
 def _formats(value: object) -> frozenset[str]:
@@ -99,16 +125,33 @@ def _formats(value: object) -> frozenset[str]:
 
 
 def apply_policy(policy: Policy, entries: list[FileEntry]) -> list[FileEntry]:
-    """Add a `policy.format-not-allowed` finding per format not allowed."""
+    """Add a `policy.format-not-allowed` finding per format not allowed.
+
+    `allow` is NOT applied here: allowed findings stay in the entry (and so in
+    the signed AI-BOM, traceably). They are excluded from the verdict by
+    `is_blocking` instead — a risk neutralised by policy must never vanish from
+    the evidence the webhook relies on."""
     if policy.allow_formats is None:
         return entries
     out = []
     for entry in entries:
         names = {f.value for f in entry.formats} or {UNKNOWN}
-        refused = sorted(names - policy.allow_formats)
         extra = tuple(
             Finding("policy.format-not-allowed", f"format {name} is not allowed by policy")
-            for name in refused
+            for name in sorted(names - policy.allow_formats)
         )
         out.append(dataclasses.replace(entry, findings=entry.findings + extra) if extra else entry)
     return out
+
+
+def is_allowed(finding: Finding, policy: Policy) -> bool:
+    """The policy explicitly accepts this rule (still shown and recorded)."""
+    return finding.rule in policy.allow
+
+
+def is_blocking(finding: Finding, policy: Policy) -> bool:
+    """A finding blocks (exit 1) unless the policy allows its rule, and either
+    it is a risk or its severity is escalated by `fail_on`."""
+    if is_allowed(finding, policy):
+        return False
+    return finding.severity == "risk" or finding.severity in policy.fail_on

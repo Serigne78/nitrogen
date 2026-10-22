@@ -10,7 +10,14 @@ import pytest
 from nitrogen.findings import Finding
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry
-from nitrogen.policy import MAX_POLICY_BYTES, Policy, PolicyError, apply_policy, load_policy
+from nitrogen.policy import (
+    MAX_POLICY_BYTES,
+    Policy,
+    PolicyError,
+    apply_policy,
+    is_blocking,
+    load_policy,
+)
 
 
 def _write(tmp_path: Path, text: str) -> Path:
@@ -125,3 +132,40 @@ def test_unanalyzed_model_formats_are_refused_unless_allowed() -> None:
 def test_unhashable_key_is_a_policy_error(tmp_path: Path) -> None:
     with pytest.raises(PolicyError):
         load_policy(_write(tmp_path, "? [a]\n: 1\n"))
+
+
+def test_fail_on_and_allow_are_loaded(tmp_path: Path) -> None:
+    policy = load_policy(_write(tmp_path, "fail_on: [warning]\nallow: [archive.encrypted]\n"))
+    assert policy.fail_on == frozenset({"warning"})
+    assert policy.allow == frozenset({"archive.encrypted"})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "fail_on: [risk]\n",  # risk is always blocking; cannot be a fail_on level
+        "fail_on: risk\n",  # not a list
+        "fail_on: [critical]\n",  # unknown severity
+        "allow: notalist\n",
+    ],
+    ids=lambda t: t[:20],
+)
+def test_invalid_fail_on_or_allow_is_an_error(tmp_path: Path, text: str) -> None:
+    with pytest.raises(PolicyError):
+        load_policy(_write(tmp_path, text))
+
+
+def test_allow_keeps_findings_but_makes_them_non_blocking() -> None:
+    # Reviewer I2: an allowed finding stays in the entry (so in the signed
+    # AI-BOM, traceably); it is only excluded from the blocking verdict.
+    policy = Policy(allow=frozenset({"pickle.import"}))
+    entry = FileEntry(
+        PurePosixPath("m.pkl"),
+        1,
+        "a" * 64,
+        frozenset({Format.PICKLE}),
+        (Finding("pickle.import", "os.system"),),
+    )
+    [out] = apply_policy(policy, [entry])
+    assert [f.rule for f in out.findings] == ["pickle.import"]  # kept
+    assert not is_blocking(out.findings[0], policy)  # but not blocking

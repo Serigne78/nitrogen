@@ -25,22 +25,9 @@ from nitrogen.policy import Policy
 _MODEL_REF = "model"
 DIGEST_ALGORITHM = "nitrogen-manifest-v1"
 
-# CycloneDX severity of every rule, explicit: third-party tools filter on it,
-# so no rule may silently fall back to a low one. Hiding a payload in a nested
-# archive (pickle.unanalyzable) is an evasion technique: high, not medium.
-SEVERITY = {
-    "pickle.import": "critical",
-    "pickle.malformed": "high",
-    "pickle.unanalyzable": "high",
-    "policy.format-not-allowed": "high",
-    "safetensors.header-size": "medium",
-    "safetensors.header-encoding": "medium",
-    "safetensors.header-json": "medium",
-    "safetensors.metadata": "medium",
-    "safetensors.tensor": "medium",
-    "safetensors.layout": "medium",
-    "findings.truncated": "info",
-}
+# Nitrogen's three severity tiers (ADR 0008) mapped to CycloneDX ratings. The
+# tier lives on the finding, so there is no per-rule table to keep in sync.
+_CYCLONEDX_SEVERITY = {"risk": "high", "warning": "medium", "info": "info"}
 
 
 def _path_bytes(entry: FileEntry) -> bytes:
@@ -69,20 +56,37 @@ def build_aibom(
 ) -> dict[str, Any]:
     policy = policy or Policy()
     refs = {e.path: f"file:{e.path}" for e in entries}
-    vulnerabilities = [
-        {
+    vulnerabilities = []
+    for index, (entry, finding) in enumerate(
+        ((e, f) for e in entries for f in e.findings), start=1
+    ):
+        vuln: dict[str, Any] = {
             "bom-ref": f"finding-{index}",
             "id": finding.rule,
             "source": {"name": "Nitrogen"},
-            "ratings": [{"severity": SEVERITY.get(finding.rule, "unknown"), "method": "other"}],
+            "ratings": [
+                {
+                    "severity": _CYCLONEDX_SEVERITY.get(finding.severity, "unknown"),
+                    "method": "other",
+                }
+            ],
             "description": finding.message,
             "affects": [{"ref": refs[entry.path]}],
         }
-        for index, (entry, finding) in enumerate(
-            ((e, f) for e in entries for f in e.findings), start=1
-        )
-    ]
-    verdict = "risk" if vulnerabilities else "compliant"
+        if finding.rule in policy.allow:
+            # Kept in the signed AI-BOM, marked: a risk accepted by policy must
+            # stay visible to whoever verifies the attestation (reviewer I2).
+            vuln["analysis"] = {"state": "resolved", "detail": "allowed by policy"}
+        vulnerabilities.append(vuln)
+
+    # The verdict ignores allowed findings, exactly like the exit code.
+    severities = {f.severity for e in entries for f in e.findings if f.rule not in policy.allow}
+    if "risk" in severities:
+        verdict = "risk"
+    elif "warning" in severities:
+        verdict = "compliant-with-warnings"
+    else:
+        verdict = "compliant"
     bom: dict[str, Any] = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
@@ -136,10 +140,17 @@ def _policy_properties(policy: Policy) -> list[dict[str, str]]:
     if policy.sha256 is None:
         return [{"name": "nitrogen:policy", "value": "none"}]
     allowed = "any" if policy.allow_formats is None else ",".join(sorted(policy.allow_formats))
-    return [
+    props = [
         {"name": "nitrogen:policy.sha256", "value": policy.sha256},
         {"name": "nitrogen:policy.allow_formats", "value": allowed},
     ]
+    # Record what the policy neutralised or hardened, so a "compliant" verdict
+    # under an allow/fail_on policy is never indistinguishable from a clean one.
+    if policy.allow:
+        props.append({"name": "nitrogen:policy.allow", "value": ",".join(sorted(policy.allow))})
+    if policy.fail_on:
+        props.append({"name": "nitrogen:policy.fail_on", "value": ",".join(sorted(policy.fail_on))})
+    return props
 
 
 def write_aibom(path: Path, bom: dict[str, Any]) -> None:

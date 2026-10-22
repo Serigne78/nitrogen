@@ -10,6 +10,8 @@ uv run nitrogen scan ./model -o bom.cdx.json --policy policy.yaml
 
 Codes de sortie : `0` conforme, `1` risque détecté, `2` erreur d'exécution.
 
+Trois niveaux de finding (ADR 0008) : `risk` (exécution possible ou structure trompeuse, bloquant), `warning` (angle mort sans chemin d'exécution prouvé, ex. membre d'archive chiffré — affiché, non bloquant par défaut), `info` (métadonnée). Une policy peut durcir (`fail_on: [warning]`) ou neutraliser un finding précis (`allow: [archive.encrypted]`).
+
 Une session de démonstration : [`docs/demo.txt`](../docs/demo.txt).
 
 ## Ce qui est analysé
@@ -31,11 +33,11 @@ Deux mesures, pour rester honnête (ADR 0007). La profondeur se mesure sur un co
 
 | Outil | Détectés | Faux positifs |
 |---|---|---|
-| Nitrogen | 36/37 | 1/4 |
+| Nitrogen | 34/37 | 0/4 |
 | picklescan 1.0.5 | 34/37 | 0/4 |
 | ModelScan 0.8.8 | 25/37 | 0/4 |
 
-Le seul cas raté par les trois outils est un `.pt` tronqué de 8 octets. Notre unique « faux positif » est un `benign_password_protected.zip` : nous refusons de certifier un membre chiffré qu'on ne peut pas lire (`pickle.unanalyzable`, choix *fail-closed*), là où picklescan le laisse passer. C'est un parti pris de prudence, pas un bug.
+À égalité avec picklescan sur son propre corpus, 0 faux positif. Les cas que Nitrogen ne compte pas comme « détectés » sont deux membres de zip **chiffrés** (signalés en `warning`, pas en `risk` : aucun chargeur ne les ouvre sans mot de passe, donc pas de chemin d'exécution — code 0 par défaut, `fail_on: [warning]` pour bloquer) et un `.pt` tronqué de 8 octets que les trois outils manquent.
 
 **Largeur** — formats réellement analysés :
 

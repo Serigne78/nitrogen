@@ -185,7 +185,7 @@
       "ratings": [
         {
           "method": "other",
-          "severity": "critical"
+          "severity": "high"
         }
       ],
       "source": {

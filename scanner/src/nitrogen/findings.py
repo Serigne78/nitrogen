@@ -15,17 +15,24 @@ MAX_FINDINGS = 100  # per rule, per file
 MAX_MESSAGE = 300  # characters
 TRUNCATED = "findings.truncated"
 
+# Severity tiers (ADR 0008), from most to least serious.
+RISK = "risk"  # code execution possible, or deceptive structure — blocks
+WARNING = "warning"  # blind spot / suspicious, no proven execution path
+INFO = "info"  # metadata, never blocks
+SEVERITIES = (RISK, WARNING, INFO)
+
 
 @dataclass(frozen=True)
 class Finding:
     rule: str  # stable identifier, e.g. "safetensors.layout"
     message: str  # human-readable detail
+    severity: str = RISK  # default: an unqualified finding blocks (fail-closed)
 
 
 def _short(finding: Finding) -> Finding:
     if len(finding.message) <= MAX_MESSAGE:
         return finding
-    return Finding(finding.rule, finding.message[:MAX_MESSAGE] + "...")
+    return Finding(finding.rule, finding.message[:MAX_MESSAGE] + "...", finding.severity)
 
 
 class BoundedFindings:
@@ -69,7 +76,7 @@ class BoundedFindings:
 
     def result(self) -> list[Finding]:
         summaries = [
-            Finding(TRUNCATED, f"{count} more {rule} finding(s) not listed")
+            Finding(TRUNCATED, f"{count} more {rule} finding(s) not listed", INFO)
             for rule, count in self._dropped.items()
         ]
         return list(self) + summaries

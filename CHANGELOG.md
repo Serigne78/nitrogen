@@ -1,5 +1,13 @@
 # Changelog
 
+## Non publié (v0.1.1 en cours)
+
+### Étape 8 — sévérités risk / warning / info (ADR 0008)
+- Trois niveaux de finding portés par le `Finding` : `risk` (bloquant, code 1), `warning` (affiché, code 0 par défaut, dans l'AI-BOM), `info`.
+- Un membre d'archive chiffré est désormais un `warning` (`archive.encrypted`), plus un risque : aucun chargeur ne l'ouvre sans mot de passe. Supprime le faux positif sur un zip chiffré bénin.
+- Policy : `fail_on` (ex. `[warning]` rend les warnings bloquants) et `allow` (neutralise un finding précis).
+- L'AI-BOM mappe les sévérités vers CycloneDX et porte le verdict `compliant` / `compliant-with-warnings` / `risk`.
+
 ## v0.1.0 — 2026-10-21
 
 Première pré-release. Scanner statique autonome ; l'admission Kubernetes (v0.2) et le runtime (v0.3) ne sont pas inclus.

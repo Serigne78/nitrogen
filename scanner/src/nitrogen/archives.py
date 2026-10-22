@@ -27,7 +27,9 @@ def check_zip(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Find
     fh.seek(0)
     try:
         with zipfile.ZipFile(fh) as zf:
-            members = [(i.filename, i.file_size) for i in zf.infolist() if not i.is_dir()]
+            members = [
+                (i.filename, i.file_size, _is_encrypted(i)) for i in zf.infolist() if not i.is_dir()
+            ]
             return _scan_members(members, lambda name: zf.read(name))
     except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
         return [Finding("pickle.unanalyzable", f"unreadable zip: {exc}")]
@@ -35,12 +37,19 @@ def check_zip(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Find
         fh.seek(0)
 
 
+def _is_encrypted(info: zipfile.ZipInfo) -> bool:
+    """Encryption is read from the central directory, never from an error
+    message: a member name is attacker-controlled and must not decide severity.
+    Bit 0 = traditional ZipCrypto, bit 6 = strong encryption, method 99 = AES."""
+    return bool(info.flag_bits & 0x1) or bool(info.flag_bits & 0x40) or info.compress_type == 99
+
+
 def check_tar(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Finding]:
     fh.seek(0)
     try:
         with tarfile.open(fileobj=fh, mode="r:") as tar:
             files = [m for m in tar.getmembers() if m.isfile()]
-            members = [(m.name, m.size) for m in files]
+            members = [(m.name, m.size, False) for m in files]  # tar has no encryption
 
             def read(name: str) -> bytes:
                 extracted = tar.extractfile(name)
@@ -53,20 +62,26 @@ def check_tar(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Find
         fh.seek(0)
 
 
-def _scan_members(members: list[tuple[str, int]], read: object) -> list[Finding]:
+def _scan_members(members: list[tuple[str, int, bool]], read: object) -> list[Finding]:
     # Bounded while walking: an archive of many members cannot pile up
     # millions of findings before the per-file cap applies.
     findings = BoundedFindings()
     total = 0
-    for name, declared_size in members:
+    for name, declared_size, encrypted in members:
+        if encrypted:
+            # No loader opens an encrypted member without the password: a blind
+            # spot (warning), not a proven risk (ADR 0008). Decided from the
+            # central directory, never from a read-error message.
+            findings.append(Finding("archive.encrypted", f"{name}: encrypted member", "warning"))
+            continue
         if declared_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
             findings.append(Finding("pickle.unanalyzable", f"{name}: member too large to scan"))
             continue
         try:
             data = read(name)[: MAX_MEMBER_BYTES + 1]  # type: ignore[operator]
         except Exception as exc:
-            # An unreadable member (password-protected, corrupt) is not a pass:
-            # it is exactly where a payload would hide. Flag, never raise.
+            # Corrupt / unsupported feature: we cannot rule out that some
+            # loader reads it. Stays a risk, whatever the member is named.
             findings.append(Finding("pickle.unanalyzable", f"{name}: cannot read member ({exc})"))
             continue
         total += len(data)

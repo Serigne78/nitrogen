@@ -207,15 +207,27 @@ def test_the_applied_policy_is_recorded() -> None:
     assert applied["nitrogen:policy.allow_formats"] == ["safetensors,unknown"]
 
 
-def test_every_known_rule_has_an_explicit_severity() -> None:
-    from nitrogen.aibom import SEVERITY
-
-    rules = {
-        "pickle.import", "pickle.malformed", "pickle.unanalyzable",
-        "policy.format-not-allowed", "findings.truncated",
-        "safetensors.header-size", "safetensors.header-encoding", "safetensors.header-json",
-        "safetensors.metadata", "safetensors.tensor", "safetensors.layout",
-    }  # fmt: skip
-    assert rules <= set(SEVERITY)
-    assert SEVERITY["pickle.import"] == "critical"
-    assert SEVERITY["pickle.unanalyzable"] == "high"  # evasion by nesting must not hide
+def test_finding_severity_maps_to_cyclonedx_rating() -> None:
+    # ADR 0008: the tier lives on the finding (risk/warning/info), mapped to a
+    # CycloneDX rating; no silent fallback.
+    entries = [
+        FileEntry(
+            PurePosixPath("m.zip"),
+            1,
+            "a" * 64,
+            frozenset({Format.ZIP}),
+            (
+                Finding("pickle.import", "os.system", "risk"),
+                Finding("archive.encrypted", "x: encrypted member", "warning"),
+                Finding("findings.truncated", "3 more pickle.import finding(s) not listed", "info"),
+            ),
+        )
+    ]
+    ratings = {
+        v["id"]: v["ratings"][0]["severity"] for v in build_aibom("m", entries)["vulnerabilities"]
+    }
+    assert ratings == {
+        "pickle.import": "high",
+        "archive.encrypted": "medium",
+        "findings.truncated": "info",
+    }

@@ -20,7 +20,8 @@ def test_a_flood_of_one_rule_cannot_evict_another() -> None:
     malformed = [f for f in result if f.rule == "pickle.malformed"]
     assert len(malformed) == MAX_FINDINGS
     assert (
-        Finding("findings.truncated", "200 more pickle.malformed finding(s) not listed") in result
+        Finding("findings.truncated", "200 more pickle.malformed finding(s) not listed", "info")
+        in result
     )
 
 
@@ -47,3 +48,20 @@ def test_not_a_list_so_extend_cannot_bypass_the_bound() -> None:
     assert not hasattr(sink, "extend")
     sink.absorb(Finding("pickle.import", f"m.f{i}") for i in range(MAX_FINDINGS * 3))
     assert len([f for f in sink.result() if f.rule == "pickle.import"]) == MAX_FINDINGS
+
+
+def test_finding_defaults_to_risk() -> None:
+    assert Finding("pickle.import", "os.system").severity == "risk"
+
+
+def test_finding_can_be_warning_or_info() -> None:
+    assert Finding("archive.encrypted", "x", "warning").severity == "warning"
+    assert Finding("findings.truncated", "x", "info").severity == "info"
+
+
+def test_truncated_summary_is_info() -> None:
+    sink = BoundedFindings()
+    for i in range(MAX_FINDINGS + 3):
+        sink.append(Finding("pickle.import", f"m.f{i}"))
+    summaries = [f for f in sink.result() if f.rule == "findings.truncated"]
+    assert summaries and all(f.severity == "info" for f in summaries)

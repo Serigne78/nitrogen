@@ -15,7 +15,7 @@ from nitrogen import __version__
 from nitrogen.aibom import build_aibom, write_aibom
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry, inventory
-from nitrogen.policy import Policy, apply_policy, load_policy
+from nitrogen.policy import Policy, apply_policy, is_allowed, is_blocking, load_policy
 
 
 class ExitCode(IntEnum):
@@ -98,16 +98,27 @@ def _scan(path: Path, output: Path | None, policy_path: Path | None) -> ExitCode
         typer.echo("Findings:")
         for file, finding in findings:
             # The message carries attacker-chosen names: escaped like the path.
-            line = _printable(f"[{finding.rule}] {finding.message}")
+            allowed = " (allowed by policy)" if is_allowed(finding, policy) else ""
+            line = _printable(f"[{finding.severity}] [{finding.rule}] {finding.message}{allowed}")
             typer.echo(f"  {_printable(str(file))}  {line}")
     if output is not None:
-        # Written for both verdicts: the evidence of a refusal matters too.
+        # Written for every verdict: the evidence of a refusal matters too.
         write_aibom(output, build_aibom(path.resolve().name or str(path), entries, policy))
         typer.echo(f"AI-BOM: {_printable(str(output))}")
-    if findings:
-        typer.echo(f"Verdict: RISK ({_plural(len(findings), 'finding')})")
+
+    blocking = [f for _, f in findings if is_blocking(f, policy)]
+    warnings = [
+        f
+        for _, f in findings
+        if f.severity == "warning" and not is_blocking(f, policy) and not is_allowed(f, policy)
+    ]
+    if blocking:
+        typer.echo(f"Verdict: RISK ({_plural(len(blocking), 'finding')})")
         return ExitCode.RISK
-    typer.echo("Verdict: COMPLIANT")
+    if warnings:
+        typer.echo(f"Verdict: COMPLIANT ({_plural(len(warnings), 'warning')})")
+    else:
+        typer.echo("Verdict: COMPLIANT")
     return ExitCode.COMPLIANT
 
 

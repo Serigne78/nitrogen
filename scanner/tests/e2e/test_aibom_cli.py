@@ -201,7 +201,7 @@ def test_findings_are_deduplicated_and_capped(tmp_path: Path) -> None:
 
 def test_a_flood_of_malformed_members_cannot_hide_the_dangerous_import(tmp_path: Path) -> None:
     # Reviewer I1: 150 broken members first, then data.pkl with os.system. The
-    # import must survive the cap, with its critical severity.
+    # import must survive the cap, at its risk severity (CycloneDX high).
     import io
     import zipfile
 
@@ -219,4 +219,68 @@ def test_a_flood_of_malformed_members_cannot_hide_the_dangerous_import(tmp_path:
     vulns = json.loads(out.read_text())["vulnerabilities"]
     imports = [v for v in vulns if v["id"] == "pickle.import"]
     assert [v["description"] for v in imports] == ["archive/data.pkl: os.system"]
-    assert imports[0]["ratings"][0]["severity"] == "critical"
+    assert imports[0]["ratings"][0]["severity"] == "high"
+
+
+ENCRYPTED = Path(__file__).resolve().parents[1] / "vendor" / "picklescan"
+
+
+def _encrypted_zip() -> Path:
+    return sorted(ENCRYPTED.glob("malicious1_0x*.zip"))[0]
+
+
+def test_encrypted_zip_is_a_warning_not_a_risk(tmp_path: Path) -> None:
+    import shutil as sh
+
+    model = tmp_path / "m"
+    model.mkdir()
+    sh.copy(_encrypted_zip(), model / "weights.zip")
+    code, output = _scan(str(model))
+    assert code == ExitCode.COMPLIANT
+    assert "archive.encrypted" in output
+    assert "warning" in output.lower()
+
+
+def test_fail_on_warning_makes_the_encrypted_zip_blocking(tmp_path: Path) -> None:
+    import shutil as sh
+
+    model = tmp_path / "m"
+    model.mkdir()
+    sh.copy(_encrypted_zip(), model / "weights.zip")
+    policy = tmp_path / "p.yaml"
+    policy.write_text("fail_on: [warning]\n")
+    code, _ = _scan(str(model), "--policy", str(policy))
+    assert code == ExitCode.RISK
+
+
+def test_allow_silences_the_encrypted_zip(tmp_path: Path) -> None:
+    import shutil as sh
+
+    model = tmp_path / "m"
+    model.mkdir()
+    sh.copy(_encrypted_zip(), model / "weights.zip")
+    policy = tmp_path / "p.yaml"
+    policy.write_text("allow: [archive.encrypted]\n")
+    code, output = _scan(str(model), "--policy", str(policy))
+    assert code == ExitCode.COMPLIANT
+    # Still shown, but marked allowed (kept for traceability, not silenced).
+    assert "allowed by policy" in output
+
+
+def test_allow_a_real_risk_is_traced_in_the_aibom(tmp_path: Path) -> None:
+    # Reviewer I2: allow neutralises the verdict but the risk must stay visible
+    # in the signed AI-BOM, and the policy must be recorded.
+    model = tmp_path / "m"
+    model.mkdir()
+    (model / "evil.pkl").write_bytes(b"cos\nsystem\n(S'echo nitrogen'\ntR.")
+    out = tmp_path / "bom.cdx.json"
+    policy = tmp_path / "p.yaml"
+    policy.write_text("allow: [pickle.import]\n")
+    code, _ = _scan(str(model), "--policy", str(policy), "-o", str(out))
+    assert code == ExitCode.COMPLIANT  # allowed → not blocking
+    bom = json.loads(out.read_text())
+    [vuln] = bom["vulnerabilities"]
+    assert vuln["id"] == "pickle.import"  # still present, not dropped
+    assert vuln["analysis"]["state"] == "resolved"  # marked allowed
+    props = {p["name"]: p["value"] for p in bom["metadata"]["component"]["properties"]}
+    assert props["nitrogen:policy.allow"] == "pickle.import"
