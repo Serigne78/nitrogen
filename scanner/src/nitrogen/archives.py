@@ -8,13 +8,24 @@ recursed, in v0.1.
 """
 
 import io
+import re
 import tarfile
 import zipfile
+from collections.abc import Iterable
 from typing import BinaryIO
 
 from nitrogen.findings import BoundedFindings, Finding
 from nitrogen.formats import Format, detect_formats
 from nitrogen.pickle_scan import scan_pickle
+
+# A PyTorch zip stores each tensor as a member `<root>/data/<numeric key>`
+# (ADR 0010). torch.load reads these as raw storage, never unpickles them.
+# Anchored to torch's real layout: a single top-level root that carries a
+# `<root>/data.pkl`, so a storage name at another depth (a/b/data/0) or under a
+# bait data.pkl in a different root (weights/data/0) is still analyzed. `\Z`,
+# not `$`, so a trailing-newline name cannot pose as storage.
+_STORAGE_MEMBER = re.compile(r"(?P<root>[^/]+)/data/\d+\Z")
+_DATA_PKL = re.compile(r"(?P<root>[^/]+)/data\.pkl\Z")
 
 # Per-member read cap: a bigger member is flagged, never fully read.
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
@@ -27,14 +38,33 @@ def check_zip(fh: BinaryIO, size: int, *, sole_format: bool = True) -> list[Find
     fh.seek(0)
     try:
         with zipfile.ZipFile(fh) as zf:
+            files = [i for i in zf.infolist() if not i.is_dir()]
+            skip = _storage_members(name.filename for name in files)
             members = [
-                (i.filename, i.file_size, _is_encrypted(i)) for i in zf.infolist() if not i.is_dir()
+                (i.filename, i.file_size, _is_encrypted(i)) for i in files if i.filename not in skip
             ]
             return _scan_members(members, lambda name: zf.read(name))
     except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
         return [Finding("pickle.unanalyzable", f"unreadable zip: {exc}")]
     finally:
         fh.seek(0)
+
+
+def _storage_members(names: Iterable[str]) -> set[str]:
+    """ADR 0010: in a PyTorch zip, the raw tensor storage members
+    `<root>/data/<key>` are not analyzed — their bytes resemble pickles and
+    archives by chance, the false positives measured in step 9. Only members
+    under a root that actually holds a `<root>/data.pkl` (torch's layout) are
+    treated as storage; everything else, and a generic zip with no data.pkl, is
+    still scanned, so a pickle hidden outside the real storage is not missed.
+
+    Matched on the archive's own (slash) spelling only: a back-slashed name is
+    not normalized into storage, so it stays analyzed (the safe direction)."""
+    all_names = list(names)
+    roots = {m["root"] for n in all_names if (m := _DATA_PKL.fullmatch(n))}
+    if not roots:
+        return set()
+    return {n for n in all_names if (m := _STORAGE_MEMBER.fullmatch(n)) and m["root"] in roots}
 
 
 def _is_encrypted(info: zipfile.ZipInfo) -> bool:
@@ -89,8 +119,27 @@ def _scan_members(members: list[tuple[str, int, bool]], read: object) -> list[Fi
             findings.append(Finding("pickle.unanalyzable", f"{name}: member too large to scan"))
             continue
         formats = detect_formats(io.BytesIO(data))
-        if formats & {Format.ZIP, Format.PYTORCH_ZIP, Format.TAR}:
+        if _is_nested_archive(data, formats):
             findings.append(Finding("pickle.unanalyzable", f"{name}: nested archive not scanned"))
         elif Format.PICKLE in formats:
             findings.absorb(scan_pickle(data, sole_format=True, source=name))
     return findings.result()
+
+
+def _is_nested_archive(data: bytes, formats: frozenset[Format]) -> bool:
+    """ADR 0009: a member is a nested archive only if it really opens as one.
+
+    `Format.TAR` already means a tar with at least one member (formats.py), and
+    `Format.PYTORCH_ZIP` means a zip whose central directory was read; both are
+    genuine. A plain `Format.ZIP` can come from a four-byte `PK` magic that a
+    raw tensor blob matches by chance, so require that it opens with an entry.
+    """
+    if formats & {Format.TAR, Format.PYTORCH_ZIP}:
+        return True
+    if Format.ZIP not in formats:
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            return any(not info.is_dir() for info in zf.infolist())
+    except (zipfile.BadZipFile, OSError, EOFError, ValueError):
+        return False

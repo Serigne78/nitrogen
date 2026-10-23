@@ -295,6 +295,26 @@ def test_legacy_torch_tar_is_detected() -> None:
     assert _detect(buf.getvalue()) == {Format.TAR}
 
 
+@pytest.mark.parametrize(
+    "size", [512, 1536, PROBE_SIZE], ids=["one-block", "three-blocks", "probe"]
+)
+def test_zero_block_is_not_a_tar(size: int) -> None:
+    # ADR 0009: tarfile.open accepts an all-zero block as an empty tar, so a
+    # zero-initialized tensor storage in a .bin (a member `data/<key>`) was
+    # taken for a nested tar and flagged RISK (a false positive on real models,
+    # e.g. BAAI/bge-small-en-v1.5). A tar needs at least one real member.
+    assert _detect(b"\x00" * size) == set()
+
+
+def test_empty_tar_is_not_a_tar() -> None:
+    # A tar with no members: torch.load's tar path reads named members and
+    # fails on an empty archive, so an empty tar is not a tar for us either.
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:"):
+        pass
+    assert Format.TAR not in _detect(buf.getvalue())
+
+
 def test_persid_first_is_not_a_pickle() -> None:
     # A plain unpickler stops on PERSID at once (no persistent_load): nothing
     # runs. A large safetensors whose size starts with "P" stays safetensors.

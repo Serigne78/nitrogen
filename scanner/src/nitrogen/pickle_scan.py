@@ -54,13 +54,23 @@ def scan_pickle(
     # just not a pickle, so its parse error is not a finding.
     has_proto = data[:1] == b"\x80"
     stream = io.BytesIO(data)
+    completed = 0  # pickles fully read (STOP reached) in this stream
     while stream.tell() < len(data):
+        progress = [0]  # opcodes consumed in the current pickle
         try:
-            _walk_one(stream, findings, source)
+            _walk_one(stream, findings, source, progress)
         except (ValueError, IndexError) as exc:
+            if completed and not progress[0]:
+                # A pickle already completed, and the bytes that follow do not
+                # even begin a pickle: this is trailing tensor storage, not a
+                # malformed pickle (ADR 0010 — legacy torch .bin appends storage
+                # after its pickles). The pickles were fully analyzed, so the
+                # size cap does not apply to the storage either.
+                return findings.result()
             if sole_format and (has_proto or findings):
                 findings.append(_finding("pickle.malformed", str(exc), source))
             return findings.result()
+        completed += 1
     if capped and not findings:
         findings.append(
             _finding("pickle.unanalyzable", f"pickle larger than {MAX_PICKLE_BYTES} bytes", source)
@@ -68,7 +78,9 @@ def scan_pickle(
     return findings.result()
 
 
-def _walk_one(stream: io.BytesIO, findings: BoundedFindings, source: str) -> None:
+def _walk_one(
+    stream: io.BytesIO, findings: BoundedFindings, source: str, progress: list[int]
+) -> None:
     """Walk a single pickle, up to and including its STOP."""
     stack: list[object] = []
     memo: dict[int, object] = {}
@@ -92,6 +104,9 @@ def _walk_one(stream: io.BytesIO, findings: BoundedFindings, source: str) -> Non
         except StopIteration:
             raise ValueError("pickle exhausted before seeing STOP") from None
         except ValueError:
+            # A failure before any opcode of this pickle is consumed leaves
+            # progress at 0: the caller reads that as trailing storage, not a
+            # malformed pickle, once an earlier pickle has completed.
             # genops reads INT/LONG with int(s); the real loader uses int(s, 0)
             # and runs past "0x1", "0o7"... Where only genops stops, we skip the
             # line and keep walking, so the import after it is still seen.
@@ -108,6 +123,7 @@ def _walk_one(stream: io.BytesIO, findings: BoundedFindings, source: str) -> Non
                 _check_global(resolved[0], resolved[1], findings, source)
                 return
             raise
+        progress[0] += 1  # an opcode of this pickle was consumed
         name = opcode.name
         if name == "STOP":
             return

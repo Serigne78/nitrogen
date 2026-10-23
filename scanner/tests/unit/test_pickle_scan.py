@@ -17,6 +17,50 @@ def test_harmless_pickle_has_no_finding() -> None:
     assert scan_pickle(b"\x80\x02K\x01.") == []  # PROTO, BININT1, STOP
 
 
+def test_trailing_storage_after_a_complete_pickle_is_not_malformed() -> None:
+    # ADR 0010: legacy torch .bin appends raw tensor storage after its pickles.
+    # Once a pickle has completed (STOP), bytes that do not even begin a pickle
+    # are that storage, not a malformed pickle. "opcode b'\x00' unknown" was the
+    # false positive on gpt2 and t5-small.
+    assert scan_pickle(b"\x80\x02K\x01." + b"\x00" * 256) == []
+
+
+def test_trailing_storage_after_a_dangerous_pickle_still_reports_the_import() -> None:
+    # Suppressing the trailing-bytes "malformed" must not drop a real finding
+    # from the pickle that preceded it.
+    assert [f.rule for f in scan_pickle(b"cos\nsystem\n(S'x'\ntR." + b"\x00" * 64)] == [
+        "pickle.import"
+    ]
+
+
+def test_truncated_sole_pickle_is_still_malformed() -> None:
+    # No pickle completed before the break: a genuinely truncated pickle. The
+    # trailing-storage rule must not swallow this (it only applies after a STOP).
+    assert _rules(b"\x80\x02(K\x01") == ["pickle.malformed"]  # MARK, BININT1, no STOP
+
+
+def test_truncated_second_pickle_is_still_malformed() -> None:
+    # A complete pickle, then a second one that starts (makes progress) but is
+    # truncated before STOP: that is malformed, not trailing storage.
+    assert _rules(b"\x80\x02K\x01." + b"\x80\x02(K\x01") == ["pickle.malformed"]
+
+
+def test_payload_after_a_complete_pickle_and_a_non_opcode_is_an_accepted_blind_spot() -> None:
+    # Reviewer frontier case: a complete pickle, then a byte that is not a pickle
+    # opcode (\x00), then a dangerous pickle. No standard loader executes the
+    # third: pickle.load stops at the first STOP; a concatenation loader crashes
+    # on the \x00 and never resyncs; legacy torch reads the rest as storage by
+    # offset. So this is clean (ADR 0010). If a loader that resyncs is ever in
+    # scope, this must be revisited.
+    assert scan_pickle(b"\x80\x02K\x01." + b"\x00" + b"cos\nsystem\n(S'x'\ntR.") == []
+
+
+def test_dangerous_first_pickle_before_the_non_opcode_is_still_flagged() -> None:
+    # The suppression only hides what comes AFTER a clean pickle; a dangerous
+    # import in the pickle that precedes the storage is always reported.
+    assert _rules(b"cos\nsystem\n(S'x'\ntR." + b"\x00" + b"\x80\x02K\x01.") == ["pickle.import"]
+
+
 def test_allowlisted_global_passes() -> None:
     assert scan_pickle(b"\x80\x02ccollections\nOrderedDict\n)R.") == []
 

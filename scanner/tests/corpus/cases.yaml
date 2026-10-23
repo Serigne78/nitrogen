@@ -214,6 +214,21 @@
   verdict: safe
   reason: realistic state_dict (OrderedDict, BINPERSID storage, torch.FloatStorage, _rebuild_tensor_v2)
 
+- file: safe_pytorch_zero_tensor.pt
+  format: pytorch-zip
+  verdict: safe
+  reason: "ADR 0009: a zero-initialized tensor storage (data/0) is not a nested tar"
+
+- file: safe_pytorch_storage_members.pt
+  format: pytorch-zip
+  verdict: safe
+  reason: "ADR 0010: tensor storage members (data/<key>) are not analyzed, even when their bytes look like a pickle/archive"
+
+- file: safe_legacy_storage.pt
+  format: pickle
+  verdict: safe
+  reason: "ADR 0010: legacy torch .bin is pickles then raw storage; the trailing storage is not a malformed pickle"
+
 - file: safe_model.safetensors
   format: safetensors
   verdict: safe

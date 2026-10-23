@@ -51,6 +51,6 @@ Deux mesures, pour rester honnête (ADR 0007). La profondeur se mesure sur un co
 
 En résumé : sur l'analyse pickle, Nitrogen est au niveau des meilleurs ; sur la largeur des formats, ModelScan couvre davantage (TensorFlow, Keras), hors du périmètre v0.1 de Nitrogen.
 
-**Faux positifs sur de vrais modèles** : `scripts/false_positives.py` télécharge quelques petits modèles Hugging Face (dont un vrai `pytorch_model.bin`) et les scanne — 0 faux positif sur l'échantillon testé. Script manuel (réseau), hors de la suite de tests.
+**Faux positifs sur de vrais modèles** : `scripts/benchmark_false_positives.py` scanne une liste figée de modèles populaires du Hub, chacun épinglé à une révision de commit (`scripts/models.txt`). Sur les 18 modèles mesurés (bert, gpt2, t5, clip, mpnet…), **0 faux positif**. Ce banc a révélé que l'analyse de chaque membre d'archive prenait le **stockage brut des tenseurs** pour un pickle ou une archive : **61 % de ces modèles étaient faussement bloqués** avant les correctifs (ADR 0009 et 0010), qui n'analysent plus que ce qu'un chargeur dépickle réellement. Détail dans [`docs/benchmark-faux-positifs.md`](../docs/benchmark-faux-positifs.md). Script opt-in (réseau), hors de la suite de tests.
 
 Un tableau sur notre propre corpus (où Nitrogen fait 36/36) reste disponible via `scripts/benchmark.py`, mais il est biaisé en notre faveur et ne sert qu'à suivre les non-régressions.

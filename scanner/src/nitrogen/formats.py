@@ -93,12 +93,17 @@ def _detect(fh: BinaryIO) -> frozenset[Format]:
 def _is_tar(fh: BinaryIO) -> bool:
     """torch.load's own test: tarfile.open(mode="r:") reads a first header.
 
-    Only that header block is parsed (checksum included); nothing is extracted.
+    ADR 0009: require at least one real member. tarfile.open accepts an all-zero
+    or empty block as an empty tar, so a zero-initialized tensor storage in a
+    .bin (a member `data/<key>`) was taken for a nested tar — a false positive
+    on real models. torch.load's tar path reads named members and fails on an
+    empty archive, so an empty/zero block is not a tar. Only the first member
+    header is parsed (checksum included); nothing is extracted.
     """
     fh.seek(0)
     try:
-        with tarfile.open(fileobj=fh, mode="r:", format=tarfile.PAX_FORMAT):
-            return True
+        with tarfile.open(fileobj=fh, mode="r:", format=tarfile.PAX_FORMAT) as tar:
+            return tar.next() is not None
     except (tarfile.TarError, OSError, ValueError, EOFError, UnicodeError):
         return False
 

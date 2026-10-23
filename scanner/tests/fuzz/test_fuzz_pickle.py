@@ -47,19 +47,20 @@ def test_detected_pickle_returning_clean_reached_stop(data: bytes) -> None:
 
 
 def _reaches_stop(data: bytes) -> bool:
+    # True once genops reaches a STOP: the first pickle completed. Trailing bytes
+    # after that STOP that do not parse as a further pickle (e.g. an empty set
+    # `\x8f.` followed by a stray `\x00`) do not unmake it — a plain loader stops
+    # at the STOP and ignores the rest. Never reaching a STOP (genops runs off
+    # the end or breaks first) is the false negative this invariant guards.
     import pickletools
 
-    stream = io.BytesIO(data)
     try:
-        while stream.tell() < len(data):
-            for opcode, _arg, _pos in pickletools.genops(stream):
-                if opcode.name == "STOP":
-                    break
-            else:
-                return False
+        for opcode, _arg, _pos in pickletools.genops(io.BytesIO(data)):
+            if opcode.name == "STOP":
+                return True
     except ValueError:
         return False
-    return True
+    return False
 
 
 def test_huge_file_is_capped_not_loaded() -> None:

@@ -340,6 +340,33 @@ def corpus() -> dict[str, bytes]:
         "safe_allowlist.pkl": _SAFE_PICKLE,
         "safe_pytorch_zip.pt": pytorch_zip(_SAFE_PICKLE),
         "safe_pytorch_model.pt": pytorch_zip(_REALISTIC_TORCH_PICKLE),
+        # A zero-initialized tensor storage (member archive/data/<key>) is all
+        # zeros, which tarfile.open takes for an empty tar: it must NOT read as a
+        # nested archive (ADR 0009, the false positive measured in step 9).
+        "safe_pytorch_zero_tensor.pt": zip_of(
+            {
+                "archive/data.pkl": _REALISTIC_TORCH_PICKLE,
+                "archive/data/0": bytes(1536),
+                "archive/version": b"3\n",
+                "archive/byteorder": b"little",
+            }
+        ),
+        # ADR 0010: the archive/data/<key> members are raw tensor storage. Their
+        # bytes resemble a tar (zeros), a pickle (PROTO + a huge length) and a
+        # zip (PK magic); none is analyzed, since torch.load reads them as
+        # storage. This single case stands in for the step-9 false positives.
+        "safe_pytorch_storage_members.pt": zip_of(
+            {
+                "archive/data.pkl": _REALISTIC_TORCH_PICKLE,
+                "archive/data/0": bytes(600),
+                "archive/data/1": proto(2) + b"\x8d\xff\xff\xff\xff\x00\x00\x00\x00",
+                "archive/data/2": b"PK\x03\x04" + bytes(60),
+                "archive/version": b"3\n",
+            }
+        ),
+        # ADR 0010: pre-1.6 torch.save (gpt2, t5-small) is pickles followed by
+        # raw storage. The trailing storage must not read as a malformed pickle.
+        "safe_legacy_storage.pt": _REALISTIC_TORCH_PICKLE + bytes(256),
         "safe_numpy_array.pkl": _NUMPY_ARRAY_PICKLE,
         "safe_numpy_file.npy": npy_file(),
         "safe_model.safetensors": safetensors(

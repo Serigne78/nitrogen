@@ -1,8 +1,9 @@
 # ADR 0007 — Benchmark neutre et honnête
 
-- Statut : accepté
+- Statut : accepté (volet faux positifs amendé à l'étape 9)
 - Date : 2026-10-22
 - Décideur : Mike
+- Amendement (étape 9, 2026-10-23) : le volet « faux positifs sur de vrais modèles » passe d'un script manuel sans modèles versionnés à une **liste figée épinglée par révision** (`scripts/models.txt`, `scripts/benchmark_false_positives.py`) et un **rapport versionné** (`docs/benchmark-faux-positifs.md`). Il a mesuré 61 % de faux positifs, corrigés par ADR 0009 et 0010.
 
 ## Contexte
 Le benchmark de la v0.1 (`scripts/benchmark.py`) tourne sur **notre** corpus, conçu autour de ce que Nitrogen sait détecter. Le 36/36 face à picklescan (26) et ModelScan (24) mesure la profondeur de notre analyse pickle, pas notre valeur générale : il est biaisé en notre faveur et ne dit rien de ce que **nous** ratons. Un chiffre défendable face à un expert doit mesurer deux axes séparés, sur un terrain que nous n'avons pas choisi.

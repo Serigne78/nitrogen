@@ -1,8 +1,9 @@
 # ADR 0004 — Périmètre de l'analyse pickle : EXT, membres de zip, tar
 
-- Statut : accepté
+- Statut : accepté (amendé par ADR 0010)
 - Date : 2026-10-19
 - Décideur : Mike
+- Amendement : ADR 0010 restreint « tout membre pickle est analysé » à « tout membre pickle **hors stockage de tenseur** » (les `<racine>/data/<clé>` d'un zip PyTorch), pour supprimer les faux positifs mesurés sur de vrais modèles (étape 9).
 
 ## Contexte
 L'étape 5 écrit l'analyseur pickle. La relecture du corpus (étape 4) a laissé trois questions ouvertes. Chacune décide si un fichier qui exécute du code au chargement peut sortir `COMPLIANT`.
