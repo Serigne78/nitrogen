@@ -13,6 +13,7 @@ import typer
 
 from nitrogen import __version__
 from nitrogen.aibom import build_aibom, write_aibom
+from nitrogen.chat_template import analyze_chat_templates
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry, inventory
 from nitrogen.policy import Policy, apply_policy, is_allowed, is_blocking, load_policy
@@ -90,7 +91,8 @@ def _scan(path: Path, output: Path | None, policy_path: Path | None) -> ExitCode
         _check_output(path, output)
     policy = load_policy(policy_path) if policy_path is not None else Policy()
 
-    entries = apply_policy(policy, analyze_remote_code(inventory(path), path))
+    scanned = analyze_chat_templates(analyze_remote_code(inventory(path), path), path)
+    entries = apply_policy(policy, scanned)
     if output is not None:
         _check_output_not_scanned(path, output, entries)
     _print_inventory(path, entries)

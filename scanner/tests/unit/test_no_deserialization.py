@@ -26,7 +26,20 @@ FORBIDDEN_MODULES = {
 # ADR 0011: the scanner reads model .py with ast.parse only. `eval`/`exec`
 # would run it; both are banned here. `compile` is not (that would flag the
 # legitimate `re.compile`), and it is harmless without an `exec` to run it.
-FORBIDDEN_NAMES = {"Unpickler", "__import__", "import_module", "eval", "exec"}
+# ADR 0013: chat templates are parsed with jinja2 Environment().parse() only.
+# `.render()` runs a template and `from_string` compiles one from text; both are
+# banned. The bare name `Template` is NOT banned — that would flag the
+# legitimate `jinja2.nodes.Template` AST node; rendering is what executes, and
+# `render` is banned.
+FORBIDDEN_NAMES = {
+    "Unpickler",
+    "__import__",
+    "import_module",
+    "eval",
+    "exec",
+    "render",
+    "from_string",
+}
 
 
 def _violations(tree: ast.AST) -> list[str]:
@@ -55,5 +68,16 @@ def test_scanner_never_imports_deserializers() -> None:
 
 
 def test_guard_detects_violations() -> None:
-    sample = "import pickle\nfrom torch import load\nx = __import__('os')\neval('1')\nexec('y=2')\n"
-    assert _violations(ast.parse(sample)) == ["pickle", "torch", "__import__", "eval", "exec"]
+    sample = (
+        "import pickle\nfrom torch import load\nx = __import__('os')\neval('1')\nexec('y=2')\n"
+        "t.render()\nenv.from_string(s)\n"
+    )
+    assert _violations(ast.parse(sample)) == [
+        "pickle",
+        "torch",
+        "__import__",
+        "eval",
+        "exec",
+        "render",
+        "from_string",
+    ]

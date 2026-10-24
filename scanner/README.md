@@ -22,11 +22,12 @@ Une session de démonstration : [`docs/demo.txt`](../docs/demo.txt).
 | zip PyTorch, zip, tar hérité | chaque membre pickle analysé, sans extraction sur disque ; les membres de stockage de tenseurs (`data/<clé>`) ne sont pas lus comme du pickle (ADR 0010) |
 | safetensors | en-tête, offsets et tailles vérifiés |
 | remote code (`trust_remote_code`) | `auto_map`/`custom_pipelines`, `modules.json`, `model_index.json`, points d'entrée (`hubconf.py`, `handler.py`) et fichiers `.py`, lus avec `ast.parse` (jamais importés), appels sensibles signalés (ADR 0011, 0012) |
+| templates de chat (Jinja) | `tokenizer_config.json`, `chat_template.jinja`/`.json`, parsés avec jinja2 (jamais rendus) ; évasion de sandbox / SSTI type CVE-2024-34359 signalée (ADR 0013) |
 | HDF5/Keras, GGUF, npy, ONNX | reconnus, **non analysés** en v0.1 (une policy peut les refuser) |
 
 Principe : **allowlist, pas denylist**. Tout import qui n'est pas explicitement autorisé est signalé. Un fichier peut avoir plusieurs formats, et chacun est analysé : l'attaquant ne choisit pas quelle analyse tourne.
 
-Identifiants de findings : `pickle.import`, `pickle.malformed`, `pickle.unanalyzable`, `archive.encrypted`, `policy.format-not-allowed`, et pour le remote code `remote_code.auto_map`, `remote_code.external`, `remote_code.entry_point`, `remote_code.python_file`, `remote_code.dangerous_call`, `remote_code.config_unreadable`.
+Identifiants de findings : `pickle.import`, `pickle.malformed`, `pickle.unanalyzable`, `archive.encrypted`, `policy.format-not-allowed`, et pour le remote code `remote_code.auto_map`, `remote_code.external`, `remote_code.entry_point`, `remote_code.python_file`, `remote_code.dangerous_call`, `remote_code.config_unreadable`, et pour les templates `chat_template.sandbox_escape`, `chat_template.hidden_instructions`, `chat_template.obfuscated`, `chat_template.unparseable`, `chat_template.oversized`.
 
 ## Comparaison
 

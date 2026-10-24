@@ -53,6 +53,16 @@ def test_scan_notes_which_code_files_to_review(tmp_path: Path) -> None:
     assert "hubconf.py" in result.output
 
 
+def test_scan_flags_jinja_sandbox_escape(tmp_path: Path) -> None:
+    # End-to-end (ADR 0013): a chat template with an SSTI sandbox escape is RISK.
+    (tmp_path / "tokenizer_config.json").write_text(
+        '{"chat_template": "{{ x.__class__.__mro__ }}"}', encoding="utf-8"
+    )
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    assert "chat_template.sandbox_escape" in result.output
+
+
 def test_scan_lists_file_format_and_hash(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_bytes(b"")
     (tmp_path / "model.safetensors").write_bytes(b"K\x01.")  # a pickle in disguise
