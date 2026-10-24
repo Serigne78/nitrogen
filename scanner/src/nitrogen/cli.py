@@ -102,6 +102,14 @@ def _scan(path: Path, output: Path | None, policy_path: Path | None) -> ExitCode
             allowed = " (allowed by policy)" if is_allowed(finding, policy) else ""
             line = _printable(f"[{finding.severity}] [{finding.rule}] {finding.message}{allowed}")
             typer.echo(f"  {_printable(str(file))}  {line}")
+    # Make a remote-code risk understandable, not mistaken for noise: say the
+    # model runs its own code and list the files to review (ADR 0012).
+    code_files = sorted({str(file) for file, f in findings if f.rule.startswith("remote_code.")})
+    if code_files:
+        typer.echo(
+            "Note: this model runs its own code if loaded with trust_remote_code / torch.hub."
+        )
+        typer.echo("      Review before loading: " + ", ".join(_printable(c) for c in code_files))
     if output is not None:
         # Written for every verdict: the evidence of a refusal matters too.
         write_aibom(output, build_aibom(path.resolve().name or str(path), entries, policy))

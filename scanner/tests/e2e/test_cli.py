@@ -43,6 +43,16 @@ def test_scan_flags_trust_remote_code(tmp_path: Path) -> None:
     assert "os.system" in result.output
 
 
+def test_scan_notes_which_code_files_to_review(tmp_path: Path) -> None:
+    # ADR 0012 UX: when the model runs its own code, the CLI says so and lists
+    # the files to review, so a risk verdict is understood, not mistaken for noise.
+    (tmp_path / "hubconf.py").write_text("def entrypoint():\n    return 1\n", encoding="utf-8")
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    assert "trust_remote_code" in result.output
+    assert "hubconf.py" in result.output
+
+
 def test_scan_lists_file_format_and_hash(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_bytes(b"")
     (tmp_path / "model.safetensors").write_bytes(b"K\x01.")  # a pickle in disguise

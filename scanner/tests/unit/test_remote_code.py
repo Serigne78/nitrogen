@@ -150,6 +150,109 @@ def test_unparseable_py_is_still_reported_without_crashing(tmp_path: Path) -> No
     assert any(rule == "remote_code.python_file" for rule, _ in out["broken.py"])
 
 
+# --- entry points by name (ADR 0012) ----------------------------------------
+
+
+@pytest.mark.parametrize("name", ["hubconf.py", "handler.py", "sub/dir/hubconf.py"])
+def test_entry_point_file_is_risk_even_without_auto_map(tmp_path: Path, name: str) -> None:
+    # ADR 0012: torch.hub.load runs hubconf.py, HF endpoints run handler.py, with
+    # no config declaration. An obfuscated one (no AST-visible dangerous call)
+    # must still be risk, at any depth — not a mere warning.
+    out = _scan(tmp_path, {name: "def entrypoint(*a, **k):\n    return _impl(*a, **k)\n"})
+    assert ("remote_code.entry_point", "risk") in out[name]
+
+
+def test_sentence_transformers_custom_module_is_risk(tmp_path: Path) -> None:
+    # modules.json wiring a module outside sentence_transformers.* is custom code.
+    out = _scan(
+        tmp_path,
+        {
+            "modules.json": json.dumps([{"idx": 0, "name": "0", "type": "custom_pool.MyPool"}]),
+            "custom_pool.py": "class MyPool:\n    pass\n",
+        },
+    )
+    assert ("remote_code.auto_map", "risk") in out["modules.json"]
+    assert ("remote_code.python_file", "risk") in out["custom_pool.py"]
+
+
+@pytest.mark.parametrize("root", ["torch", "transformers", "numpy", "timm", "custom_mod"])
+def test_sentence_transformers_non_st_root_is_custom_code(tmp_path: Path, root: str) -> None:
+    # Reviewer C1: sentence-transformers runs any modules.json `type` NOT prefixed
+    # `sentence_transformers.` from the repo under trust_remote_code — including a
+    # `type` whose root looks like a framework (torch.Pooling -> repo file
+    # torch.py). Only `sentence_transformers.` is builtin; everything else = risk.
+    out = _scan(
+        tmp_path,
+        {
+            "modules.json": json.dumps([{"idx": 0, "name": "0", "type": f"{root}.Evil"}]),
+            f"{root}.py": "class Evil:\n    pass\n",
+        },
+    )
+    assert ("remote_code.auto_map", "risk") in out["modules.json"]
+    assert ("remote_code.python_file", "risk") in out[f"{root}.py"]
+
+
+def test_diffusers_framework_component_stays_safe(tmp_path: Path) -> None:
+    # The flip side of C1: for diffusers a `[library, Class]` component is
+    # imported from the INSTALLED library, so a framework root stays safe.
+    out = _scan(
+        tmp_path,
+        {
+            "model_index.json": json.dumps(
+                {"text_encoder": ["torch", "nn"], "vae": ["transformers", "X"]}
+            )
+        },
+    )
+    assert not any(rule.startswith("remote_code") for rules in out.values() for rule, _ in rules)
+
+
+def test_sentence_transformers_builtin_modules_are_not_flagged(tmp_path: Path) -> None:
+    # A standard modules.json (only sentence_transformers.*) is not a false positive.
+    out = _scan(
+        tmp_path,
+        {
+            "modules.json": json.dumps(
+                [
+                    {"idx": 0, "name": "0", "type": "sentence_transformers.models.Transformer"},
+                    {"idx": 1, "name": "1", "type": "sentence_transformers.models.Pooling"},
+                ]
+            )
+        },
+    )
+    assert not any(rule.startswith("remote_code") for rules in out.values() for rule, _ in rules)
+
+
+def test_diffusers_custom_pipeline_is_risk(tmp_path: Path) -> None:
+    out = _scan(
+        tmp_path,
+        {"model_index.json": json.dumps({"_class_name": "X", "custom_pipeline": "pipeline_x"})},
+    )
+    assert ("remote_code.auto_map", "risk") in out["model_index.json"]
+
+
+def test_diffusers_custom_component_is_risk(tmp_path: Path) -> None:
+    out = _scan(
+        tmp_path,
+        {"model_index.json": json.dumps({"unet": ["my_custom_mod", "MyUNet"]})},
+    )
+    assert ("remote_code.auto_map", "risk") in out["model_index.json"]
+
+
+def test_diffusers_builtin_components_are_not_flagged(tmp_path: Path) -> None:
+    out = _scan(
+        tmp_path,
+        {
+            "model_index.json": json.dumps(
+                {
+                    "_class_name": "StableDiffusionPipeline",
+                    "unet": ["diffusers", "UNet2DConditionModel"],
+                }
+            )
+        },
+    )
+    assert not any(rule.startswith("remote_code") for rules in out.values() for rule, _ in rules)
+
+
 # --- reviewer: fail-closed against the critical bypasses ---------------------
 
 
@@ -215,6 +318,28 @@ def test_ast_evasions_are_caught(tmp_path: Path, source: str) -> None:
     # slip past the AST.
     out = _scan(tmp_path, {"helper.py": source})
     assert ("remote_code.dangerous_call", "risk") in out["helper.py"]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"modules.json": json.dumps({"not": "a list"})},
+        {"modules.json": json.dumps([{"type": 123}, "string", None, {"no_type": 1}])},
+        {"model_index.json": json.dumps(["not", "a", "dict"])},
+        {"model_index.json": json.dumps({"unet": [None, "X"], "vae": ["a", "b", "c"], "x": "y"})},
+        {"model_index.json": json.dumps({"custom_pipeline": 42})},
+    ],
+    ids=[
+        "modules-not-list",
+        "modules-bad-items",
+        "index-not-dict",
+        "index-bad-components",
+        "index-bad-pipeline",
+    ],
+)
+def test_ecosystem_json_parsers_never_crash(tmp_path: Path, files: dict[str, str]) -> None:
+    # Reviewer #4: unexpected JSON shapes are ignored, never an exception.
+    _scan(tmp_path, files)  # must not raise
 
 
 def test_deeply_nested_config_does_not_crash(tmp_path: Path) -> None:
