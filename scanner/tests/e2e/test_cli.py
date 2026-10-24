@@ -28,6 +28,21 @@ def test_scan_directory(tmp_path: Path) -> None:
     assert "Verdict" in result.output
 
 
+def test_scan_flags_trust_remote_code(tmp_path: Path) -> None:
+    # End-to-end (ADR 0011): a repo wiring local .py through auto_map is RISK,
+    # exit 1, and the finding is shown. The .py is never imported.
+    (tmp_path / "config.json").write_text(
+        '{"auto_map": {"AutoModel": "modeling_x.XModel"}}', encoding="utf-8"
+    )
+    (tmp_path / "modeling_x.py").write_text(
+        "import os\nos.system('echo nitrogen')\n", encoding="utf-8"
+    )
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == ExitCode.RISK
+    assert "remote_code." in result.output
+    assert "os.system" in result.output
+
+
 def test_scan_lists_file_format_and_hash(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_bytes(b"")
     (tmp_path / "model.safetensors").write_bytes(b"K\x01.")  # a pickle in disguise

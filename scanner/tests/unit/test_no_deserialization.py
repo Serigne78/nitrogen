@@ -23,7 +23,10 @@ FORBIDDEN_MODULES = {
     "shelve",
     "torch",
 }
-FORBIDDEN_NAMES = {"Unpickler", "__import__", "import_module"}
+# ADR 0011: the scanner reads model .py with ast.parse only. `eval`/`exec`
+# would run it; both are banned here. `compile` is not (that would flag the
+# legitimate `re.compile`), and it is harmless without an `exec` to run it.
+FORBIDDEN_NAMES = {"Unpickler", "__import__", "import_module", "eval", "exec"}
 
 
 def _violations(tree: ast.AST) -> list[str]:
@@ -52,5 +55,5 @@ def test_scanner_never_imports_deserializers() -> None:
 
 
 def test_guard_detects_violations() -> None:
-    sample = "import pickle\nfrom torch import load\nx = __import__('os')\n"
-    assert _violations(ast.parse(sample)) == ["pickle", "torch", "__import__"]
+    sample = "import pickle\nfrom torch import load\nx = __import__('os')\neval('1')\nexec('y=2')\n"
+    assert _violations(ast.parse(sample)) == ["pickle", "torch", "__import__", "eval", "exec"]
