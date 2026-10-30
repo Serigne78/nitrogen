@@ -5,8 +5,8 @@ rendered or compiled (ADR 0013)."""
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from nitrogen.chat_template import scan_template
 
+from nitrogen.chat_template import scan_template
 from nitrogen.findings import Finding
 
 _TOKENS = [

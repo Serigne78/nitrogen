@@ -4,9 +4,9 @@ parsed with ast.parse only — never imported or executed (rule 1, ADR 0011)."""
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from nitrogen.remote_code import scan_python_source
 
 from nitrogen.findings import Finding
+from nitrogen.remote_code import scan_python_source
 
 _TOKENS = [
     "import",

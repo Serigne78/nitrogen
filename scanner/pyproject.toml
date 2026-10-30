@@ -60,6 +60,12 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]  # assert is the point of a test
 
+# `nitrogen` is our package: declare it first-party so import sorting (I001) is
+# deterministic across OSes. Auto-detection depends on the filesystem, which let
+# a mis-sorted import pass on Windows while failing on the Linux CI runners.
+[tool.ruff.lint.isort]
+known-first-party = ["nitrogen"]
+
 # Rule #1: the scanner never deserializes what it scans.
 # Any import of these modules/APIs fails lint, hence CI.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
