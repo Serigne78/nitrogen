@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from nitrogen import __version__
+from nitrogen.findings import Finding
 from nitrogen.inventory import ANALYZED_FORMATS, FileEntry
 from nitrogen.policy import Policy
 
@@ -52,14 +53,23 @@ def manifest_digest(entries: list[FileEntry]) -> str:
 
 
 def build_aibom(
-    model_name: str, entries: list[FileEntry], policy: Policy | None = None
+    model_name: str,
+    entries: list[FileEntry],
+    policy: Policy | None = None,
+    *,
+    source_findings: list[Finding] | tuple[Finding, ...] = (),
+    source_uri: str | None = None,
+    revision: str | None = None,
+    coverage: str | None = None,
 ) -> dict[str, Any]:
     policy = policy or Policy()
     refs = {e.path: f"file:{e.path}" for e in entries}
+    # Per-file findings affect their file; source-level findings (unpinned
+    # revision, ADR 0014) affect the model component itself.
+    items = [(refs[e.path], f) for e in entries for f in e.findings]
+    items += [(_MODEL_REF, f) for f in source_findings]
     vulnerabilities = []
-    for index, (entry, finding) in enumerate(
-        ((e, f) for e in entries for f in e.findings), start=1
-    ):
+    for index, (affected_ref, finding) in enumerate(items, start=1):
         vuln: dict[str, Any] = {
             "bom-ref": f"finding-{index}",
             "id": finding.rule,
@@ -71,7 +81,7 @@ def build_aibom(
                 }
             ],
             "description": finding.message,
-            "affects": [{"ref": refs[entry.path]}],
+            "affects": [{"ref": affected_ref}],
         }
         if finding.rule in policy.allow:
             # Kept in the signed AI-BOM, marked: a risk accepted by policy must
@@ -80,7 +90,7 @@ def build_aibom(
         vulnerabilities.append(vuln)
 
     # The verdict ignores allowed findings, exactly like the exit code.
-    severities = {f.severity for e in entries for f in e.findings if f.rule not in policy.allow}
+    severities = {f.severity for _, f in items if f.rule not in policy.allow}
     if "risk" in severities:
         verdict = "risk"
     elif "warning" in severities:
@@ -105,6 +115,7 @@ def build_aibom(
                 "properties": [
                     {"name": "nitrogen:verdict", "value": verdict},
                     {"name": "nitrogen:digest", "value": DIGEST_ALGORITHM},
+                    *_source_properties(source_uri, revision, coverage),
                     *_policy_properties(policy),
                 ],
             },
@@ -132,6 +143,22 @@ def _file_component(entry: FileEntry, ref: str) -> dict[str, Any]:
     properties.append({"name": "nitrogen:size", "value": str(entry.size)})
     component["properties"] = properties
     return component
+
+
+def _source_properties(
+    source_uri: str | None, revision: str | None, coverage: str | None
+) -> list[dict[str, str]]:
+    """The remote source, resolved commit, and integrity coverage (ADR 0014): a
+    signed AI-BOM pins the exact origin and revision the bytes came from, and
+    makes explicit how many files the Hub SHA-256 check actually covered."""
+    props = []
+    if source_uri is not None:
+        props.append({"name": "nitrogen:source", "value": source_uri})
+    if revision is not None:
+        props.append({"name": "nitrogen:revision", "value": revision})
+    if coverage is not None:
+        props.append({"name": "nitrogen:integrity.coverage", "value": coverage})
+    return props
 
 
 def _policy_properties(policy: Policy) -> list[dict[str, str]]:

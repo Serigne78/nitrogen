@@ -923,6 +923,7 @@ name = "nitrogen-scanner"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "huggingface-hub" },
     { name = "jinja2" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -931,7 +932,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "cyclonedx-python-lib", extra = ["json-validation"] },
-    { name = "huggingface-hub" },
     { name = "hypothesis" },
     { name = "modelscan" },
     { name = "mypy" },
@@ -947,6 +947,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "typer", specifier = ">=0.16" },
@@ -955,7 +956,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "cyclonedx-python-lib", extras = ["json-validation"], specifier = ">=11.12.0" },
-    { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "hypothesis", specifier = ">=6.130" },
     { name = "modelscan", specifier = ">=0.8.8" },
     { name = "mypy", specifier = ">=1.15" },

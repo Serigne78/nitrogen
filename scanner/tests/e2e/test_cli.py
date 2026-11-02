@@ -63,6 +63,49 @@ def test_scan_flags_jinja_sandbox_escape(tmp_path: Path) -> None:
     assert "chat_template.sandbox_escape" in result.output
 
 
+def test_scan_hf_integrity_mismatch_is_risk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end (ADR 0014): a downloaded file whose SHA-256 differs from the
+    # Hub's is RISK. The download is injected so the test stays offline.
+    from nitrogen.source import Resolved
+
+    model = tmp_path / "dl"
+    model.mkdir()
+    (model / "model.safetensors").write_bytes(struct.pack("<Q", 2) + b"{}")
+    resolved = Resolved(
+        model,
+        "hf://org/model",
+        "a" * 40,
+        {"model.safetensors": "d" * 64},
+        published=frozenset({"model.safetensors"}),
+    )
+    monkeypatch.setattr("nitrogen.cli.resolve", lambda src, **kw: resolved)
+    result = runner.invoke(app, ["scan", "hf://org/model@" + "a" * 40])
+    assert result.exit_code == ExitCode.RISK
+    assert "integrity.mismatch" in result.output
+
+
+def test_scan_hf_unpinned_revision_is_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nitrogen.findings import Finding
+    from nitrogen.source import Resolved
+
+    model = tmp_path / "dl"
+    model.mkdir()
+    (model / "config.json").write_text("{}", encoding="utf-8")
+    warn = Finding("source.unpinned_revision", "unpinned revision resolved to cccc", "warning")
+    resolved = Resolved(
+        model, "hf://org/model", "c" * 40, {}, published=frozenset({"config.json"}), findings=[warn]
+    )
+    monkeypatch.setattr("nitrogen.cli.resolve", lambda src, **kw: resolved)
+    result = runner.invoke(app, ["scan", "hf://org/model"])
+    assert result.exit_code == ExitCode.COMPLIANT
+    assert "source.unpinned_revision" in result.output
+    assert "Source: hf://org/model" in result.output
+
+
 def test_scan_lists_file_format_and_hash(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_bytes(b"")
     (tmp_path / "model.safetensors").write_bytes(b"K\x01.")  # a pickle in disguise

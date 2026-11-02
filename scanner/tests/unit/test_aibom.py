@@ -231,3 +231,28 @@ def test_finding_severity_maps_to_cyclonedx_rating() -> None:
         "archive.encrypted": "medium",
         "findings.truncated": "info",
     }
+
+
+def test_source_findings_and_metadata_validate(tmp_path: Path) -> None:
+    # ADR 0014: an hf:// scan records the source + resolved revision on the model
+    # component and threads source-level findings (unpinned revision) as a
+    # vulnerability affecting the model itself. Must stay schema-valid.
+    bom = build_aibom(
+        "org/model",
+        CLEAN,
+        source_findings=[Finding("source.unpinned_revision", "resolved to " + "a" * 40, "warning")],
+        source_uri="hf://org/model",
+        revision="a" * 40,
+    )
+    _valid(bom)
+    props = {p["name"]: p["value"] for p in bom["metadata"]["component"]["properties"]}
+    assert props["nitrogen:source"] == "hf://org/model"
+    assert props["nitrogen:revision"] == "a" * 40
+    model_vulns = [v for v in bom["vulnerabilities"] if v["id"] == "source.unpinned_revision"]
+    assert model_vulns and model_vulns[0]["affects"] == [{"ref": "model"}]
+
+
+def test_local_scan_has_no_source_properties() -> None:
+    bom = build_aibom("m", CLEAN)
+    names = {p["name"] for p in bom["metadata"]["component"]["properties"]}
+    assert "nitrogen:source" not in names and "nitrogen:revision" not in names

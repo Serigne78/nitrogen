@@ -5,8 +5,11 @@ output is a human-readable verdict, the AI-BOM is only written with `-o`, and
 the exit code is always meaningful.
 """
 
+import tempfile
+from contextlib import ExitStack
+from dataclasses import replace
 from enum import IntEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import typer
@@ -14,10 +17,20 @@ import typer
 from nitrogen import __version__
 from nitrogen.aibom import build_aibom, write_aibom
 from nitrogen.chat_template import analyze_chat_templates
+from nitrogen.findings import Finding
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry, inventory
 from nitrogen.policy import Policy, apply_policy, is_allowed, is_blocking, load_policy
 from nitrogen.remote_code import analyze_remote_code
+from nitrogen.source import (
+    HfSource,
+    LocalSource,
+    check_integrity,
+    integrity_coverage,
+    missing_files,
+    parse_target,
+    resolve,
+)
 
 
 class ExitCode(IntEnum):
@@ -52,7 +65,10 @@ def main(
 
 @app.command()
 def scan(
-    path: Annotated[Path, typer.Argument(help="Model file or directory to scan.")],
+    target: Annotated[
+        str,
+        typer.Argument(help="Model file or directory, or hf://org/model[@revision]."),
+    ],
     output: Annotated[
         Path | None,
         typer.Option("-o", "--output", help="Write the CycloneDX AI-BOM to this file."),
@@ -67,7 +83,7 @@ def scan(
     Exit code: 0 = compliant, 1 = risk detected, 2 = execution error.
     """
     try:
-        code = _scan(path, output, policy)
+        code = _scan(target, output, policy)
     except Exception as exc:
         typer.echo(f"error: {_printable(str(exc))}", err=True)
         code = ExitCode.ERROR
@@ -80,49 +96,110 @@ def scan(
     raise typer.Exit(code)
 
 
-def _scan(path: Path, output: Path | None, policy_path: Path | None) -> ExitCode:
+def _scan(target: str, output: Path | None, policy_path: Path | None) -> ExitCode:
     # Fail fast: everything that can fail for sure is checked before the scan,
     # which can take minutes on a large model.
-    if not path.exists():
-        raise FileNotFoundError(f"no such file or directory: {path}")
+    source = parse_target(target)
+    if isinstance(source, LocalSource) and not source.path.exists():
+        raise FileNotFoundError(f"no such file or directory: {source.path}")
     if policy_path is not None and not policy_path.is_file():
         raise FileNotFoundError(f"policy file not found: {policy_path}")
-    if output is not None:
-        _check_output(path, output)
     policy = load_policy(policy_path) if policy_path is not None else Policy()
 
-    scanned = analyze_chat_templates(analyze_remote_code(inventory(path), path), path)
-    entries = apply_policy(policy, scanned)
-    if output is not None:
-        _check_output_not_scanned(path, output, entries)
-    _print_inventory(path, entries)
-    findings = [(e.path, f) for e in entries for f in e.findings]
-    if findings:
-        typer.echo("Findings:")
-        for file, finding in findings:
-            # The message carries attacker-chosen names: escaped like the path.
-            allowed = " (allowed by policy)" if is_allowed(finding, policy) else ""
-            line = _printable(f"[{finding.severity}] [{finding.rule}] {finding.message}{allowed}")
-            typer.echo(f"  {_printable(str(file))}  {line}")
-    # Make a remote-code risk understandable, not mistaken for noise: say the
-    # model runs its own code and list the files to review (ADR 0012).
-    code_files = sorted({str(file) for file, f in findings if f.rule.startswith("remote_code.")})
-    if code_files:
-        typer.echo(
-            "Note: this model runs its own code if loaded with trust_remote_code / torch.hub."
-        )
-        typer.echo("      Review before loading: " + ", ".join(_printable(c) for c in code_files))
-    if output is not None:
-        # Written for every verdict: the evidence of a refusal matters too.
-        write_aibom(output, build_aibom(path.resolve().name or str(path), entries, policy))
-        typer.echo(f"AI-BOM: {_printable(str(output))}")
+    with ExitStack() as stack:
+        # An hf:// source is downloaded (never loaded) into a temp dir for the
+        # duration of the scan; a local source stays offline, in place.
+        dest = None
+        if not isinstance(source, LocalSource):
+            dest = Path(
+                stack.enter_context(
+                    # ignore_cleanup_errors: a read-only downloaded file must not
+                    # turn a clean verdict into an exit-2 error at teardown (Windows).
+                    tempfile.TemporaryDirectory(prefix="nitrogen-hf-", ignore_cleanup_errors=True)
+                )
+            )
+        resolved = resolve(source, dest=dest)
+        local = resolved.local_dir
+        if output is not None:
+            _check_output(local, output)
 
-    blocking = [f for _, f in findings if is_blocking(f, policy)]
-    warnings = [
-        f
-        for _, f in findings
-        if f.severity == "warning" and not is_blocking(f, policy) and not is_allowed(f, policy)
-    ]
+        scanned = analyze_chat_templates(analyze_remote_code(inventory(local), local), local)
+        # Integrity (ADR 0014): a local SHA-256 differing from the Hub's is a
+        # risk; a local file the Hub does not list is injected (warning). Both
+        # attach to the file they concern. Files the Hub lists but that are
+        # absent locally are source-level (integrity.missing).
+        per_file: dict[PurePosixPath, list[Finding]] = {}
+        for ipath, finding in check_integrity(
+            scanned, resolved.expected_sha256, resolved.published
+        ):
+            per_file.setdefault(ipath, []).append(finding)
+        scanned = [
+            replace(e, findings=e.findings + tuple(per_file[e.path])) if e.path in per_file else e
+            for e in scanned
+        ]
+        entries = apply_policy(policy, scanned)
+        if output is not None:
+            _check_output_not_scanned(local, output, entries)
+        _print_inventory(local, entries)
+
+        # (label, finding): per-file findings keyed by path; source-level ones
+        # (unpinned revision, missing files) by the source URI.
+        source_label = resolved.source_uri or "model"
+        source_findings = [*resolved.findings, *missing_files(resolved.published, entries)]
+        findings = [(str(e.path), f) for e in entries for f in e.findings]
+        findings += [(source_label, f) for f in source_findings]
+        if findings:
+            typer.echo("Findings:")
+            for label, finding in findings:
+                # The message carries attacker-chosen names: escaped like the path.
+                allowed = " (allowed by policy)" if is_allowed(finding, policy) else ""
+                line = _printable(
+                    f"[{finding.severity}] [{finding.rule}] {finding.message}{allowed}"
+                )
+                typer.echo(f"  {_printable(label)}  {line}")
+        # Make a remote-code risk understandable, not mistaken for noise: say the
+        # model runs its own code and list the files to review (ADR 0012).
+        code_files = sorted({label for label, f in findings if f.rule.startswith("remote_code.")})
+        if code_files:
+            typer.echo(
+                "Note: this model runs its own code if loaded with trust_remote_code / torch.hub."
+            )
+            typer.echo(
+                "      Review before loading: " + ", ".join(_printable(c) for c in code_files)
+            )
+        if resolved.source_uri is not None:
+            typer.echo(f"Source: {_printable(resolved.source_uri)} @ {resolved.revision}")
+        if output is not None:
+            model_name = (
+                source.repo
+                if isinstance(source, HfSource)
+                else (local.resolve().name or str(local))
+            )
+            # Written for every verdict: the evidence of a refusal matters too.
+            write_aibom(
+                output,
+                build_aibom(
+                    model_name,
+                    entries,
+                    policy,
+                    source_findings=source_findings,
+                    source_uri=resolved.source_uri,
+                    revision=resolved.revision,
+                    coverage=integrity_coverage(resolved),
+                ),
+            )
+            typer.echo(f"AI-BOM: {_printable(str(output))}")
+
+        blocking = [f for _, f in findings if is_blocking(f, policy)]
+        warnings = [
+            f
+            for _, f in findings
+            if f.severity == "warning" and not is_blocking(f, policy) and not is_allowed(f, policy)
+        ]
+        return _verdict(blocking, warnings)
+
+
+def _verdict(blocking: list[Finding], warnings: list[Finding]) -> ExitCode:
     if blocking:
         typer.echo(f"Verdict: RISK ({_plural(len(blocking), 'finding')})")
         return ExitCode.RISK

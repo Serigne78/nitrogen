@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
+    "huggingface-hub>=2.2.0",
     "jinja2>=3.1",
     "pyyaml>=6.0.3",
     "typer>=0.16",
@@ -17,7 +18,6 @@ nitrogen = "nitrogen.cli:app"
 [dependency-groups]
 dev = [
     "cyclonedx-python-lib[json-validation]>=11.12.0",
-    "huggingface-hub>=2.2.0",
     "hypothesis>=6.130",
     "modelscan>=0.8.8",
     "mypy>=1.15",
