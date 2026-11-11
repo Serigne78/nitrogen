@@ -20,7 +20,15 @@ from nitrogen.chat_template import analyze_chat_templates
 from nitrogen.findings import Finding
 from nitrogen.formats import Format
 from nitrogen.inventory import FileEntry, inventory
-from nitrogen.policy import Policy, apply_policy, is_allowed, is_blocking, load_policy
+from nitrogen.metadata import extract_metadata
+from nitrogen.policy import (
+    Policy,
+    apply_policy,
+    is_allowed,
+    is_blocking,
+    license_finding,
+    load_policy,
+)
 from nitrogen.remote_code import analyze_remote_code
 from nitrogen.source import (
     HfSource,
@@ -142,10 +150,18 @@ def _scan(target: str, output: Path | None, policy_path: Path | None) -> ExitCod
             _check_output_not_scanned(local, output, entries)
         _print_inventory(local, entries)
 
-        # (label, finding): per-file findings keyed by path; source-level ones
-        # (unpinned revision, missing files) by the source URI.
+        # Model metadata for the AI-BOM, plus the license policy check (ADR 0015).
+        metadata = extract_metadata(entries, local)
+        license_issue = license_finding(metadata.license, policy)
+
+        # (label, finding): per-file findings keyed by path; model-level ones
+        # (unpinned revision, missing files, license) by the source URI / model.
         source_label = resolved.source_uri or "model"
-        source_findings = [*resolved.findings, *missing_files(resolved.published, entries)]
+        source_findings = [
+            *resolved.findings,
+            *missing_files(resolved.published, entries),
+            *([license_issue] if license_issue is not None else []),
+        ]
         findings = [(str(e.path), f) for e in entries for f in e.findings]
         findings += [(source_label, f) for f in source_findings]
         if findings:
@@ -186,6 +202,7 @@ def _scan(target: str, output: Path | None, policy_path: Path | None) -> ExitCod
                     source_uri=resolved.source_uri,
                     revision=resolved.revision,
                     coverage=integrity_coverage(resolved),
+                    metadata=metadata,
                 ),
             )
             typer.echo(f"AI-BOM: {_printable(str(output))}")

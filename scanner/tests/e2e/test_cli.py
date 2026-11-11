@@ -106,6 +106,18 @@ def test_scan_hf_unpinned_revision_is_warning(
     assert "Source: hf://org/model" in result.output
 
 
+def test_scan_license_not_allowed_is_risk(tmp_path: Path) -> None:
+    # End-to-end (ADR 0015): a license outside allow_licenses blocks the scan.
+    model = tmp_path / "m"
+    model.mkdir()
+    (model / "README.md").write_text("---\nlicense: gpl-3.0\n---\n# M\n", encoding="utf-8")
+    policy = tmp_path / "p.yaml"
+    policy.write_text("allow_licenses: [apache-2.0]\n", encoding="utf-8")
+    result = runner.invoke(app, ["scan", str(model), "--policy", str(policy)])
+    assert result.exit_code == ExitCode.RISK
+    assert "policy.license-not-allowed" in result.output
+
+
 def test_scan_lists_file_format_and_hash(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_bytes(b"")
     (tmp_path / "model.safetensors").write_bytes(b"K\x01.")  # a pickle in disguise

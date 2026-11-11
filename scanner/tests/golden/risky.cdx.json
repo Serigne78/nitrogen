@@ -144,6 +144,11 @@
           "content": "54cb5e4d0d9cf0b33239b02f81a480d42b6d7218b3a7be50db27cda1bcb6fb3a"
         }
       ],
+      "modelCard": {
+        "modelParameters": {
+          "modelArchitecture": "Demo"
+        }
+      },
       "name": "my-model",
       "properties": [
         {

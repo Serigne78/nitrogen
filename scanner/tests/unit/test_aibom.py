@@ -256,3 +256,51 @@ def test_local_scan_has_no_source_properties() -> None:
     bom = build_aibom("m", CLEAN)
     names = {p["name"] for p in bom["metadata"]["component"]["properties"]}
     assert "nitrogen:source" not in names and "nitrogen:revision" not in names
+
+
+def test_model_card_metadata_validates_against_schema() -> None:
+    # ADR 0015: architecture, license and lineage in the CycloneDX modelCard,
+    # schema-valid.
+    from nitrogen.metadata import ModelMetadata
+
+    meta = ModelMetadata(
+        model_type="gpt2",
+        architectures=["GPT2LMHeadModel"],
+        dtype="float16",
+        quantization="gptq",
+        license="apache-2.0",
+        base_models=["meta-llama/Llama-3"],
+        datasets=["squad", "glue"],
+    )
+    bom = build_aibom("m", CLEAN, metadata=meta)
+    _valid(bom)
+    comp = bom["metadata"]["component"]
+    assert comp["licenses"] == [{"license": {"name": "apache-2.0"}}]
+    params = comp["modelCard"]["modelParameters"]
+    assert params["architectureFamily"] == "gpt2"
+    assert params["modelArchitecture"] == "GPT2LMHeadModel"
+    assert {"type": "dataset", "name": "squad"} in params["datasets"]
+    props = {p["name"]: p["value"] for p in comp["modelCard"]["properties"]}
+    assert props["nitrogen:base_model"] == "meta-llama/Llama-3"
+    assert props["nitrogen:dtype"] == "float16"
+
+
+def test_no_metadata_means_no_model_card() -> None:
+    bom = build_aibom("m", CLEAN)
+    assert "modelCard" not in bom["metadata"]["component"]
+    assert "licenses" not in bom["metadata"]["component"]
+
+
+def test_adverse_metadata_stays_schema_valid() -> None:
+    # Author-controlled metadata (control chars, quotes, long strings) must not
+    # break the signed AI-BOM's CycloneDX validity (ensure_ascii escaping).
+    from nitrogen.metadata import ModelMetadata
+
+    meta = ModelMetadata(
+        model_type="x" * 200,
+        architectures=["</x>"],
+        license='A"B\tC',
+        datasets=["d\n"],
+        base_models=["a" * 200],
+    )
+    _valid(build_aibom("m", CLEAN, metadata=meta))

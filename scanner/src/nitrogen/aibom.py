@@ -21,6 +21,7 @@ from typing import Any
 from nitrogen import __version__
 from nitrogen.findings import Finding
 from nitrogen.inventory import ANALYZED_FORMATS, FileEntry
+from nitrogen.metadata import ModelMetadata
 from nitrogen.policy import Policy
 
 _MODEL_REF = "model"
@@ -61,6 +62,7 @@ def build_aibom(
     source_uri: str | None = None,
     revision: str | None = None,
     coverage: str | None = None,
+    metadata: ModelMetadata | None = None,
 ) -> dict[str, Any]:
     policy = policy or Policy()
     refs = {e.path: f"file:{e.path}" for e in entries}
@@ -125,7 +127,37 @@ def build_aibom(
     }
     if vulnerabilities:
         bom["vulnerabilities"] = vulnerabilities
+    if metadata is not None:
+        _add_model_card(bom["metadata"]["component"], metadata)
     return bom
+
+
+def _add_model_card(component: dict[str, Any], meta: ModelMetadata) -> None:
+    """License and model-card metadata on the model component (ADR 0015). The
+    license is recorded by name (not an SPDX id) so any label stays schema-valid."""
+    if meta.license:
+        component["licenses"] = [{"license": {"name": meta.license}}]
+    parameters: dict[str, Any] = {}
+    if meta.model_type:
+        parameters["architectureFamily"] = meta.model_type
+    if meta.architectures:
+        parameters["modelArchitecture"] = meta.architectures[0]
+    if meta.datasets:
+        parameters["datasets"] = [{"type": "dataset", "name": d} for d in meta.datasets]
+    properties = []
+    if meta.dtype:
+        properties.append({"name": "nitrogen:dtype", "value": meta.dtype})
+    if meta.quantization:
+        properties.append({"name": "nitrogen:quantization", "value": meta.quantization})
+    if meta.base_models:
+        properties.append({"name": "nitrogen:base_model", "value": ",".join(meta.base_models)})
+    card: dict[str, Any] = {}
+    if parameters:
+        card["modelParameters"] = parameters
+    if properties:
+        card["properties"] = properties
+    if card:
+        component["modelCard"] = card
 
 
 def _file_component(entry: FileEntry, ref: str) -> dict[str, Any]:

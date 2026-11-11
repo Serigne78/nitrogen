@@ -30,7 +30,7 @@ UNKNOWN = "unknown"  # pseudo-format: no supported loader reads the file
 FORMAT_NAMES = frozenset({f.value for f in Format} | {UNKNOWN})
 # Severities a policy may escalate: never "risk" (always blocking already).
 ESCALATABLE = frozenset({"warning", "info"})
-_KEYS = frozenset({"allow_formats", "fail_on", "allow"})
+_KEYS = frozenset({"allow_formats", "fail_on", "allow", "allow_licenses"})
 
 
 class PolicyError(Exception):
@@ -42,6 +42,7 @@ class Policy:
     allow_formats: frozenset[str] | None = None  # None: no format restriction
     fail_on: frozenset[str] = frozenset()  # severities made blocking (e.g. warning)
     allow: frozenset[str] = frozenset()  # finding rules to neutralise
+    allow_licenses: frozenset[str] | None = None  # None: no license restriction (ADR 0015)
     sha256: str | None = None  # of the policy file, recorded in the AI-BOM
 
 
@@ -88,12 +89,32 @@ def load_policy(path: Path) -> Policy:
     if unknown:
         raise PolicyError(f"unknown policy key(s): {sorted(map(str, unknown))}")
     allow_formats = _formats(document["allow_formats"]) if "allow_formats" in document else None
+    licenses = (
+        _str_list("allow_licenses", document["allow_licenses"])
+        if "allow_licenses" in document
+        else None
+    )
     return Policy(
         allow_formats=allow_formats,
         fail_on=_fail_on(document.get("fail_on")),
         allow=_str_list("allow", document.get("allow")),
+        allow_licenses=licenses,
         sha256=sha256,
     )
+
+
+def license_finding(declared: str | None, policy: Policy) -> Finding | None:
+    """A declared license outside `allow_licenses`, or no license at all under
+    a license allowlist, is a finding (ADR 0015). Comparison is case-insensitive.
+    Without `allow_licenses`, licenses are unrestricted."""
+    if policy.allow_licenses is None:
+        return None
+    allowed = {name.strip().casefold() for name in policy.allow_licenses}
+    if declared is None:
+        return Finding("policy.license-not-allowed", "no license declared", "risk")
+    if declared.strip().casefold() not in allowed:
+        return Finding("policy.license-not-allowed", f"license not allowed: {declared}", "risk")
+    return None
 
 
 def _str_list(key: str, value: object) -> frozenset[str]:

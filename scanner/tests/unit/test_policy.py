@@ -169,3 +169,48 @@ def test_allow_keeps_findings_but_makes_them_non_blocking() -> None:
     [out] = apply_policy(policy, [entry])
     assert [f.rule for f in out.findings] == ["pickle.import"]  # kept
     assert not is_blocking(out.findings[0], policy)  # but not blocking
+
+
+def test_allow_licenses_is_loaded(tmp_path: Path) -> None:
+    policy = load_policy(_write(tmp_path, "allow_licenses: [apache-2.0, mit]\n"))
+    assert policy.allow_licenses == frozenset({"apache-2.0", "mit"})
+
+
+def test_license_in_allowlist_passes() -> None:
+    from nitrogen.policy import license_finding
+
+    assert license_finding("apache-2.0", Policy(allow_licenses=frozenset({"apache-2.0"}))) is None
+
+
+def test_license_match_is_case_insensitive() -> None:
+    from nitrogen.policy import license_finding
+
+    assert license_finding("Apache-2.0", Policy(allow_licenses=frozenset({"apache-2.0"}))) is None
+
+
+def test_license_not_allowed_is_risk() -> None:
+    from nitrogen.policy import license_finding
+
+    finding = license_finding("gpl-3.0", Policy(allow_licenses=frozenset({"apache-2.0"})))
+    assert finding is not None
+    assert (finding.rule, finding.severity) == ("policy.license-not-allowed", "risk")
+
+
+def test_missing_license_under_allowlist_is_flagged() -> None:
+    from nitrogen.policy import license_finding
+
+    finding = license_finding(None, Policy(allow_licenses=frozenset({"apache-2.0"})))
+    assert finding is not None and finding.rule == "policy.license-not-allowed"
+
+
+def test_no_allow_licenses_never_flags() -> None:
+    from nitrogen.policy import license_finding
+
+    assert license_finding("anything", Policy()) is None
+    assert license_finding(None, Policy()) is None
+
+
+def test_license_comparison_strips_whitespace() -> None:
+    from nitrogen.policy import license_finding
+
+    assert license_finding(" mit ", Policy(allow_licenses=frozenset({"mit"}))) is None
